@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Student Ability Report Generator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">AR</div>
+          <div>
+            <p>Ability Report</p>
+            <span>IGCSE & IAL</span>
+          </div>
+        </div>
+
+        <section class="upload-panel">
+          <label class="upload-box" for="csvFile">
+            <span class="upload-icon">+</span>
+            <strong>Upload results CSV</strong>
+            <small>student, qualification, subject, exam, date, score, maxScore, skill, questionType, subtopic</small>
+          </label>
+          <input id="csvFile" type="file" accept=".csv,text/csv" />
+          <div class="actions">
+            <button id="loadSample" type="button">Use sample data</button>
+            <button id="downloadTemplate" type="button">CSV template</button>
+          </div>
+        </section>
+
+        <section class="filters">
+          <label>
+            Student
+            <select id="studentSelect"></select>
+          </label>
+          <label>
+            Subject
+            <select id="subjectSelect"></select>
+          </label>
+          <label>
+            Qualification
+            <select id="qualificationSelect">
+              <option value="IAL">Edexcel IAL</option>
+              <option value="IGCSE">IGCSE</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="format-help">
+          <h2>CSV columns</h2>
+          <p>
+            Add one row per test result. The app groups weekly scores, compares
+            skills, estimates grade position, and drafts a parent report.
+          </p>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Parent-ready learning analytics</p>
+            <h1 id="pageTitle">Student Performance Report</h1>
+          </div>
+          <div class="topbar-actions">
+            <button id="printReport" type="button">Print report</button>
+            <button id="exportReport" type="button">Export text</button>
+          </div>
+        </header>
+
+        <section class="summary-grid" aria-label="student summary">
+          <article>
+            <span>Latest Score</span>
+            <strong id="latestScore">--</strong>
+            <small id="latestMeta">Waiting for data</small>
+          </article>
+          <article>
+            <span>Weekly Change</span>
+            <strong id="weeklyChange">--</strong>
+            <small>Latest result versus previous result</small>
+          </article>
+          <article>
+            <span>Estimated Grade</span>
+            <strong id="estimatedGrade">--</strong>
+            <small id="gradeMeta">Based on selected qualification</small>
+          </article>
+          <article>
+            <span>Focus Area</span>
+            <strong id="focusArea">--</strong>
+            <small>Lowest skill average</small>
+          </article>
+        </section>
+
+        <section class="chart-layout">
+          <article class="chart-panel wide">
+            <div class="panel-heading">
+              <div>
+                <h2>Weekly Progress & Forecast</h2>
+                <p>Actual scores plus conservative, expected, and optimistic paths.</p>
+              </div>
+            </div>
+            <div class="chart-frame trend-frame">
+              <canvas id="trendChart"></canvas>
+            </div>
+          </article>
+
+          <article class="chart-panel">
+            <div class="panel-heading">
+              <div>
+                <h2 id="radarHeading">Ability Radar</h2>
+                <p id="radarDescription">Skill profile for the selected subject.</p>
+              </div>
+              <div class="segmented-control" id="radarModeControls" aria-label="radar mode">
+                <button type="button" data-mode="topic" class="active">Topic</button>
+                <button type="button" data-mode="question">Question</button>
+              </div>
+            </div>
+            <div class="chart-frame">
+              <canvas id="radarChart"></canvas>
+            </div>
+            <div class="topic-detail" id="topicDetail"></div>
+          </article>
+
+          <article class="chart-panel wide">
+            <div class="panel-heading">
+              <div>
+                <h2>Exam Curve Position</h2>
+                <p id="curveDescription">Smoothed estimated score distribution with grade boundaries.</p>
+              </div>
+            </div>
+            <div class="chart-frame curve-frame">
+              <canvas id="curveChart"></canvas>
+            </div>
+            <div class="annotation-grid" id="performanceAnnotations"></div>
+          </article>
+
+          <article class="report-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Generated Parent Report</h2>
+                <p>Editable narrative based on the uploaded results.</p>
+              </div>
+            </div>
+            <textarea id="reportText" spellcheck="true"></textarea>
+          </article>
+        </section>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
