@@ -24,12 +24,26 @@
         </div>
 
         <section class="upload-panel">
-          <label class="upload-box" for="csvFile">
+          <label class="upload-box" for="resultsFile">
             <span class="upload-icon">+</span>
-            <strong>Upload results CSV</strong>
-            <small>student, qualification, subject, exam, date, score, maxScore, skill, questionType, subtopic</small>
+            <strong>Upload results CSV / XLSX</strong>
+            <small>Tutor upload: student scores, question count, difficulty, topic tags</small>
           </label>
-          <input id="csvFile" type="file" accept=".csv,text/csv" />
+          <input id="resultsFile" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
+          <p class="file-status" id="resultsFileStatus">No results file selected</p>
+
+          <label class="upload-box compact-upload" for="paperFile">
+            <span class="upload-icon">+</span>
+            <strong>Upload test / exam paper</strong>
+            <small>PDF, PNG, JPG, or other paper scans for tutor reference</small>
+          </label>
+          <input id="paperFile" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,application/pdf,image/*" multiple />
+          <p class="file-status" id="paperFileStatus">No paper file selected</p>
+
+          <div class="csv-columns">
+            <strong>Results columns</strong>
+            <small>student, qualification, subject, exam, date, score, maxScore, skill, questionType, subtopic, questionCount, difficulty</small>
+          </div>
           <div class="actions">
             <button id="loadSample" type="button">Use sample data</button>
             <button id="downloadTemplate" type="button">CSV template</button>
@@ -138,7 +152,42 @@
             <div class="chart-frame curve-frame">
               <canvas id="curveChart"></canvas>
             </div>
+            <div class="boundary-distance" id="boundaryDistance"></div>
             <div class="annotation-grid" id="performanceAnnotations"></div>
+          </article>
+
+          <article class="chart-panel wide-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Strong / Weak Topic Map</h2>
+                <p>Accuracy, trend, status, and data confidence by topic.</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="insight-table" id="topicMapTable"></table>
+            </div>
+          </article>
+
+          <article class="chart-panel wide-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Topic Mastery Heatmap</h2>
+                <p>Recent topic mastery across the latest four assessment weeks.</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="heatmap-table" id="heatmapTable"></table>
+            </div>
+          </article>
+
+          <article class="chart-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Difficulty-adjusted Performance</h2>
+                <p>Accuracy by difficulty and adjusted index for fairer weekly interpretation.</p>
+              </div>
+            </div>
+            <div id="difficultyPanel" class="difficulty-panel"></div>
           </article>
 
           <article class="report-panel">

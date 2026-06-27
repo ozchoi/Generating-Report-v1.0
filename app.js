@@ -92,7 +92,9 @@ const sampleRows = sampleBlueprints.flatMap((blueprint) =>
     maxScore: blueprint.qualification === "IAL" ? 300 : 240,
     skill: blueprint.skills[index],
     questionType: blueprint.questionTypes[index],
-    subtopic: blueprint.subtopics[index]
+    subtopic: blueprint.subtopics[index],
+    questionCount: sampleQuestionCount(index),
+    difficulty: sampleDifficulty(index)
   }))
 );
 
@@ -257,7 +259,8 @@ const subjectSelect = document.querySelector("#subjectSelect");
 const qualificationSelect = document.querySelector("#qualificationSelect");
 const reportText = document.querySelector("#reportText");
 
-document.querySelector("#csvFile").addEventListener("change", handleFile);
+document.querySelector("#resultsFile").addEventListener("change", handleResultsFile);
+document.querySelector("#paperFile").addEventListener("change", handlePaperFiles);
 document.querySelector("#loadSample").addEventListener("click", () => {
   rows = [...sampleRows];
   refreshSelectors();
@@ -282,9 +285,15 @@ document.querySelectorAll("#radarModeControls button").forEach((button) => {
 refreshSelectors();
 render();
 
-function handleFile(event) {
+function handleResultsFile(event) {
   const file = event.target.files[0];
   if (!file) return;
+
+  document.querySelector("#resultsFileStatus").textContent = `Selected: ${file.name}`;
+  if (!file.name.toLowerCase().endsWith(".csv")) {
+    document.querySelector("#resultsFileStatus").textContent = `Selected: ${file.name} - XLSX import UI ready; CSV parsing is active in this prototype.`;
+    return;
+  }
 
   const reader = new FileReader();
   reader.onload = () => {
@@ -302,6 +311,18 @@ function handleFile(event) {
     }
   };
   reader.readAsText(file);
+}
+
+function handlePaperFiles(event) {
+  const files = [...event.target.files];
+  const status = document.querySelector("#paperFileStatus");
+  if (!files.length) {
+    status.textContent = "No paper file selected";
+    return;
+  }
+  const names = files.slice(0, 2).map((file) => file.name).join(", ");
+  const extra = files.length > 2 ? ` +${files.length - 2} more` : "";
+  status.textContent = `Selected: ${names}${extra}`;
 }
 
 function parseCsv(text) {
@@ -349,7 +370,9 @@ function normalizeRow(row) {
     maxScore: Number(row.maxScore || row.max_score || row.MaxScore || row.total || row.Total || 100),
     skill: row.skill || row.Skill || row.topic || row.Topic || "Overall",
     questionType: row.questionType || row.question_type || row.QuestionType || row.question || row.Question || "",
-    subtopic: row.subtopic || row.Subtopic || row.detail || row.Detail || ""
+    subtopic: row.subtopic || row.Subtopic || row.detail || row.Detail || "",
+    questionCount: Number(row.questionCount || row.question_count || row.QuestionCount || row.questions || row.Questions || 10),
+    difficulty: row.difficulty || row.Difficulty || "Medium"
   };
 }
 
@@ -390,7 +413,9 @@ function render() {
     date: row.date,
     skill: row.skill,
     questionType: row.questionType,
-    subtopic: row.subtopic
+    subtopic: row.subtopic,
+    questionCount: row.questionCount,
+    difficulty: row.difficulty
   }));
 
   const latest = points.at(-1);
@@ -415,6 +440,10 @@ function render() {
   renderRadar(activeProfile, selectedRows, selectedSubject);
   renderCurve(latestRawScore, selectedRows.at(-1).maxScore, selectedSubject, selectedQualification);
   renderPerformanceAnnotations(weakestSkill, strongestSkill, selectedSubject);
+  renderTopicMap(selectedRows, selectedSubject);
+  renderBoundaryDistance(latestRawScore, selectedRows.at(-1).maxScore, selectedSubject, selectedQualification, weakestSkill);
+  renderHeatmap(selectedRows, selectedSubject);
+  renderDifficultyPanel(selectedRows);
   reportText.value = generateReport(selectedStudent, selectedSubject, points, grade, weakestSkill, activeProfile);
 }
 
@@ -759,6 +788,199 @@ function renderPerformanceAnnotations(weakestSkill, strongestSkill, subject) {
   `;
 }
 
+function renderTopicMap(selectedRows, subject) {
+  const table = document.querySelector("#topicMapTable");
+  const topicStats = buildTopicStats(selectedRows, subject);
+
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>Area</th>
+        <th>Accuracy</th>
+        <th>Trend</th>
+        <th>Status</th>
+        <th>Data confidence</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${topicStats
+        .map((item) => `
+          <tr>
+            <td><strong>${escapeHtml(item.topic)}</strong></td>
+            <td>${Math.round(item.accuracy)}%</td>
+            <td>${escapeHtml(item.trendLabel)}</td>
+            <td><span class="status-pill ${item.statusClass}">${escapeHtml(item.status)}</span></td>
+            <td>
+              <span class="confidence-pill ${item.confidenceClass}">${escapeHtml(item.confidence)}</span>
+              <div class="muted-line">based on ${item.questions} questions</div>
+            </td>
+          </tr>
+        `)
+        .join("")}
+    </tbody>
+  `;
+}
+
+function buildTopicStats(selectedRows, subject) {
+  const grouped = new Map();
+  selectedRows.forEach((row) => {
+    const topic = topicForRow(row, subject);
+    const list = grouped.get(topic) ?? [];
+    list.push(row);
+    grouped.set(topic, list);
+  });
+
+  return [...grouped.entries()]
+    .map(([topic, topicRows]) => {
+      const sorted = [...topicRows].sort((a, b) => new Date(a.date) - new Date(b.date));
+      const accuracy = weightedAccuracy(sorted);
+      const questions = sorted.reduce((sum, row) => sum + safeQuestionCount(row), 0);
+      const trend = sorted.length > 1
+        ? accuracyOf(sorted.at(-1)) - accuracyOf(sorted[0])
+        : estimateTopicTrend(selectedRows, sorted[0]);
+      const confidence = confidenceForQuestions(questions);
+      const status = statusForAccuracy(accuracy, trend, questions);
+      return {
+        topic,
+        accuracy,
+        questions,
+        trend,
+        trendLabel: trendLabel(trend, sorted.length),
+        confidence: confidence.label,
+        confidenceClass: confidence.className,
+        status: status.label,
+        statusClass: status.className
+      };
+    })
+    .sort((a, b) => a.accuracy - b.accuracy);
+}
+
+function renderBoundaryDistance(currentScore, maxScore, subject, qualification, weakestSkill) {
+  const container = document.querySelector("#boundaryDistance");
+  const boundaries = scaledBoundaries(maxScore, subject, qualification).filter((boundary) => boundary.grade !== "U");
+  const currentIndex = boundaries.findLastIndex((boundary) => currentScore >= boundary.min);
+  const visible = boundaries
+    .filter((_boundary, index) => index >= Math.max(0, currentIndex - 1) && index <= Math.min(boundaries.length - 1, currentIndex + 2))
+    .slice(0, 4);
+  const nextTarget = boundaries.find((boundary) => boundary.min > currentScore);
+  const currentGrade = gradeFor(currentScore, maxScore, subject, qualification);
+  const targetText = nextTarget
+    ? `Short-term target: secure Grade ${nextTarget.grade} by improving ${Math.max(1, nextTarget.min - currentScore)} marks in ${weakestSkill?.[0] ?? "the focus area"}.`
+    : "Short-term target: maintain the current top boundary and reduce careless mark loss.";
+
+  container.innerHTML = `
+    <div class="boundary-summary">
+      <div><span>Current mark</span><strong>${currentScore}/${maxScore}</strong></div>
+      <div><span>Current grade</span><strong>${escapeHtml(currentGrade)}</strong></div>
+      <div><span>Next boundary</span><strong>${nextTarget ? `Grade ${escapeHtml(nextTarget.grade)} at ${nextTarget.min}` : "Top band"}</strong></div>
+    </div>
+    <div class="table-wrap">
+      <table class="boundary-table">
+        <thead>
+          <tr><th>Target</th><th>Required</th><th>Current</th><th>Gap</th></tr>
+        </thead>
+        <tbody>
+          ${visible
+            .map((boundary) => {
+              const gap = currentScore - boundary.min;
+              return `<tr>
+                <td>Grade ${escapeHtml(boundary.grade)}</td>
+                <td>${boundary.min}</td>
+                <td>${currentScore}</td>
+                <td>${gap >= 0 ? `+${gap}` : gap}</td>
+              </tr>`;
+            })
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+    <p class="boundary-target">${escapeHtml(targetText)}</p>
+  `;
+}
+
+function renderHeatmap(selectedRows, subject) {
+  const table = document.querySelector("#heatmapTable");
+  const weeks = selectedRows.slice(-4).map((row, index) => ({
+    label: `Week ${selectedRows.length - 4 + index + 1}`,
+    row
+  }));
+  const stats = buildTopicStats(selectedRows, subject).slice(0, 8);
+  const overallAverage = average(selectedRows.map(accuracyOf));
+
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>Topic</th>
+        ${weeks.map((week) => `<th>${escapeHtml(week.label)}</th>`).join("")}
+        <th>Current</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${stats
+        .map((stat) => {
+          const cells = weeks.map((week) => heatmapValueForTopic(selectedRows, subject, stat.topic, week.row, overallAverage));
+          return `<tr>
+            <td><strong>${escapeHtml(stat.topic)}</strong></td>
+            ${cells.map((value) => `<td class="heat-cell ${heatClass(value)}">${Math.round(value)}%</td>`).join("")}
+            <td><span class="status-pill ${stat.statusClass}">${escapeHtml(stat.status)}</span></td>
+          </tr>`;
+        })
+        .join("")}
+    </tbody>
+  `;
+}
+
+function renderDifficultyPanel(selectedRows) {
+  const panel = document.querySelector("#difficultyPanel");
+  const grouped = new Map();
+  selectedRows.forEach((row) => {
+    const difficulty = normalizeDifficulty(row.difficulty);
+    const list = grouped.get(difficulty) ?? [];
+    list.push(row);
+    grouped.set(difficulty, list);
+  });
+
+  const order = ["Easy", "Medium", "Hard", "Exam-style", "Challenge"];
+  const rowsByDifficulty = order
+    .filter((difficulty) => grouped.has(difficulty))
+    .map((difficulty) => {
+      const list = grouped.get(difficulty);
+      return {
+        difficulty,
+        accuracy: weightedAccuracy(list),
+        questions: list.reduce((sum, row) => sum + safeQuestionCount(row), 0)
+      };
+    });
+
+  const adjustedIndex = adjustedPerformanceIndex(selectedRows);
+  const weakestDifficulty = [...rowsByDifficulty].sort((a, b) => a.accuracy - b.accuracy)[0];
+  panel.innerHTML = `
+    <div class="difficulty-note">
+      <span>Adjusted Performance Index</span>
+      <strong>${Math.round(adjustedIndex)}%</strong>
+      <p>${escapeHtml(difficultyInsight(rowsByDifficulty, weakestDifficulty))}</p>
+    </div>
+    <div class="table-wrap">
+      <table class="difficulty-table">
+        <thead>
+          <tr><th>Difficulty</th><th>Accuracy</th><th>Evidence</th></tr>
+        </thead>
+        <tbody>
+          ${rowsByDifficulty
+            .map((item) => `
+              <tr>
+                <td><strong>${escapeHtml(item.difficulty)}</strong></td>
+                <td>${Math.round(item.accuracy)}%</td>
+                <td>${item.questions} questions</td>
+              </tr>
+            `)
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 function generateReport(student, subject, points, grade, weakestSkill, skillAverages) {
   const latest = points.at(-1);
   const previous = points.at(-2);
@@ -801,6 +1023,120 @@ function scaledBoundaries(maxScore, subject, qualification) {
   }));
 }
 
+function topicForRow(row, subject) {
+  return subject.toLowerCase() === "physics" ? inferPhysicsTopic(row) : row.skill;
+}
+
+function accuracyOf(row) {
+  return (row.score / row.maxScore) * 100;
+}
+
+function safeQuestionCount(row) {
+  const count = Number(row.questionCount);
+  return Number.isFinite(count) && count > 0 ? count : 10;
+}
+
+function weightedAccuracy(rowList) {
+  const totalQuestions = rowList.reduce((sum, row) => sum + safeQuestionCount(row), 0);
+  const weighted = rowList.reduce((sum, row) => sum + accuracyOf(row) * safeQuestionCount(row), 0);
+  return totalQuestions ? weighted / totalQuestions : average(rowList.map(accuracyOf));
+}
+
+function estimateTopicTrend(selectedRows, topicRow) {
+  const sorted = [...selectedRows].sort((a, b) => new Date(a.date) - new Date(b.date));
+  if (sorted.length < 2) return 0;
+  const overallTrend = accuracyOf(sorted.at(-1)) - accuracyOf(sorted[0]);
+  const position = sorted.findIndex((row) => row === topicRow);
+  const recencyBoost = position >= sorted.length - 3 ? 1 : 0.5;
+  return overallTrend * 0.25 * recencyBoost;
+}
+
+function trendLabel(trend, rowCount) {
+  if (rowCount < 2 && Math.abs(trend) < 2) return "not enough history";
+  if (trend >= 3) return "Improving";
+  if (trend <= -3) return "Declining";
+  return "Stable";
+}
+
+function confidenceForQuestions(questions) {
+  if (questions >= 12) return { label: "reliable", className: "confidence-reliable" };
+  if (questions >= 6) return { label: "building", className: "confidence-building" };
+  return { label: "not enough data", className: "confidence-limited" };
+}
+
+function statusForAccuracy(accuracy, trend, questions) {
+  if (questions < 6) return { label: "Watch", className: "status-watch" };
+  if (accuracy >= 78 && trend >= -4) return { label: "Strong", className: "status-strong" };
+  if (accuracy >= 68) return { label: "Good", className: "status-good" };
+  if (accuracy >= 58 || trend > 3) return { label: "Developing", className: "status-watch" };
+  return { label: "Priority", className: "status-priority" };
+}
+
+function heatmapValueForTopic(selectedRows, subject, topic, weekRow, overallAverage) {
+  const direct = selectedRows.find((row) => row.date === weekRow.date && topicForRow(row, subject) === topic);
+  if (direct) return accuracyOf(direct);
+
+  const topicRows = selectedRows.filter((row) => topicForRow(row, subject) === topic);
+  const topicAverage = topicRows.length ? weightedAccuracy(topicRows) : overallAverage;
+  const weekOffset = accuracyOf(weekRow) - overallAverage;
+  return clamp(topicAverage + weekOffset * 0.35, 0, 100);
+}
+
+function heatClass(value) {
+  if (value >= 78) return "heat-strong";
+  if (value >= 68) return "heat-good";
+  if (value >= 58) return "heat-watch";
+  return "heat-priority";
+}
+
+function normalizeDifficulty(value) {
+  const source = String(value || "Medium").toLowerCase();
+  if (source.includes("easy")) return "Easy";
+  if (source.includes("hard")) return "Hard";
+  if (source.includes("exam")) return "Exam-style";
+  if (source.includes("challenge")) return "Challenge";
+  return "Medium";
+}
+
+function difficultyWeight(difficulty) {
+  return {
+    Easy: 0.9,
+    Medium: 1,
+    Hard: 1.12,
+    "Exam-style": 1.18,
+    Challenge: 1.25
+  }[difficulty] ?? 1;
+}
+
+function adjustedPerformanceIndex(selectedRows) {
+  const weighted = selectedRows.reduce((sum, row) => {
+    const difficulty = normalizeDifficulty(row.difficulty);
+    return sum + accuracyOf(row) * difficultyWeight(difficulty) * safeQuestionCount(row);
+  }, 0);
+  const weightTotal = selectedRows.reduce((sum, row) => sum + difficultyWeight(normalizeDifficulty(row.difficulty)) * safeQuestionCount(row), 0);
+  return weightTotal ? clamp(weighted / weightTotal, 0, 100) : 0;
+}
+
+function difficultyInsight(rowsByDifficulty, weakestDifficulty) {
+  const easy = rowsByDifficulty.find((item) => item.difficulty === "Easy");
+  const examStyle = rowsByDifficulty.find((item) => item.difficulty === "Exam-style" || item.difficulty === "Hard" || item.difficulty === "Challenge");
+  if (easy && examStyle && easy.accuracy - examStyle.accuracy >= 15) {
+    return "Student handles routine questions well but loses marks when questions become exam-style or multi-step.";
+  }
+  if (weakestDifficulty) {
+    return `${weakestDifficulty.difficulty} questions are currently the best place to gain marks quickly.`;
+  }
+  return "Add difficulty tags to the CSV to separate routine marks from harder exam-style performance.";
+}
+
+function sampleQuestionCount(index) {
+  return [12, 14, 16, 12, 18, 10, 14, 18][index % 8];
+}
+
+function sampleDifficulty(index) {
+  return ["Challenge", "Exam-style", "Hard", "Medium", "Exam-style", "Hard", "Medium", "Easy"][index % 8];
+}
+
 function gaussian(x, mean, standardDeviation) {
   return Math.exp(-0.5 * ((x - mean) / standardDeviation) ** 2);
 }
@@ -813,6 +1149,10 @@ function averageDelta(values) {
   if (values.length < 2) return 0;
   const deltas = values.slice(1).map((value, index) => value - values[index]);
   return average(deltas);
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function unique(values) {
@@ -831,8 +1171,8 @@ function formatDate(date) {
 
 function downloadTemplate() {
   const template = [
-    "student,qualification,subject,exam,date,score,maxScore,skill,questionType,subtopic",
-    "Mika Wong,IAL,Physics,IAL Physics Unit 1,2026-06-20,238,300,Mechanics,Long application,Moments"
+    "student,qualification,subject,exam,date,score,maxScore,skill,questionType,subtopic,questionCount,difficulty",
+    "Mika Wong,IAL,Physics,IAL Physics Unit 1,2026-06-20,238,300,Mechanics,Long application,Moments,12,Exam-style"
   ].join("\n");
   downloadFile("student-results-template.csv", template, "text/csv");
 }
