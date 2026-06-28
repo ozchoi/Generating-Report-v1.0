@@ -243,8 +243,12 @@ const gradeBoundaryPlugin = {
         ctx.beginPath();
         ctx.arc(x, y, 5, 0, Math.PI * 2);
         ctx.fill();
-        ctx.textAlign = x > chartArea.right - 64 ? "right" : "left";
-        ctx.fillText(`Student ${student.score}`, x + (ctx.textAlign === "right" ? -8 : 8), y - 8);
+        const labelX = x + 8;
+        const alignRight = labelX + 96 > chartArea.right;
+        ctx.textAlign = alignRight ? "right" : "left";
+        const textX = x + (alignRight ? -8 : 8);
+        ctx.fillText(`Student ${student.score}`, textX, y - 12);
+        ctx.fillText(`Ahead of ~${student.percentile}%`, textX, y + 4);
       }
     }
 
@@ -712,9 +716,10 @@ function renderCurve(latestScore, maxScore, subject, qualification) {
   const spread = maxScore * 0.2;
   const distribution = scores.map((score) => ({ x: score, y: gaussian(score, center, spread) * 100 }));
   const studentDensity = gaussian(latestScore, center, spread) * 100;
+  const studentPercentile = Math.round(normalCdf((latestScore - center) / spread) * 100);
   document.querySelector("#curveDescription").textContent = `${boundaryPreset.source}; scaled to ${maxScore} marks.`;
   const curveOptions = chartOptions({
-    y: { title: "Estimated density", displayTicks: false },
+    y: { title: "Students around this score", displayTicks: false },
     x: { title: "Score with grade boundaries" }
   });
   curveOptions.layout = { padding: { top: 34 } };
@@ -723,7 +728,18 @@ function renderCurve(latestScore, maxScore, subject, qualification) {
   curveOptions.scales.x.max = maxScore;
   curveOptions.plugins.gradeBoundaryPlugin = {
     boundaries,
-    student: { score: latestScore, density: studentDensity }
+    student: { score: latestScore, density: studentDensity, percentile: studentPercentile }
+  };
+  curveOptions.plugins.tooltip = {
+    callbacks: {
+      title: (items) => `Score ${items[0].parsed.x}`,
+      label: (item) => `Students around this score: ${Math.round(item.parsed.y)}% of peak`,
+      afterBody: (items) => {
+        const score = items[0].parsed.x;
+        const percentile = Math.round(normalCdf((score - center) / spread) * 100);
+        return `This score is ahead of about ${percentile}% of students.`;
+      }
+    }
   };
 
   curveChart?.destroy();
@@ -732,7 +748,7 @@ function renderCurve(latestScore, maxScore, subject, qualification) {
     data: {
       datasets: [
         {
-          label: "Estimated cohort density",
+          label: "Typical score range",
           data: distribution,
           borderColor: "#1f78a8",
           backgroundColor: "rgba(31, 120, 168, 0.12)",
@@ -1156,6 +1172,24 @@ function sampleDifficulty(index) {
 
 function gaussian(x, mean, standardDeviation) {
   return Math.exp(-0.5 * ((x - mean) / standardDeviation) ** 2);
+}
+
+function normalCdf(value) {
+  return 0.5 * (1 + erf(value / Math.sqrt(2)));
+}
+
+function erf(value) {
+  const sign = value < 0 ? -1 : 1;
+  const x = Math.abs(value);
+  const a1 = 0.254829592;
+  const a2 = -0.284496736;
+  const a3 = 1.421413741;
+  const a4 = -1.453152027;
+  const a5 = 1.061405429;
+  const p = 0.3275911;
+  const t = 1 / (1 + p * x);
+  const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+  return sign * y;
 }
 
 function average(values) {
