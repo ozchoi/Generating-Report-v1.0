@@ -733,7 +733,7 @@ function renderCurve(latestScore, maxScore, subject, qualification) {
   curveOptions.plugins.tooltip = {
     callbacks: {
       title: (items) => `Score ${items[0].parsed.x}`,
-      label: (item) => `Students around this score: ${Math.round(item.parsed.y)}% of peak`,
+      label: () => "",
       afterBody: (items) => {
         const score = items[0].parsed.x;
         const percentile = Math.round(normalCdf((score - center) / spread) * 100);
