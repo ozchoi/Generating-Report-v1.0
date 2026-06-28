@@ -151,6 +151,8 @@ let rows = [...sampleRows];
 let trendChart;
 let radarChart;
 let curveChart;
+let printTopicRadarChart;
+let printQuestionRadarChart;
 let radarMode = "topic";
 let selectedDrillTopic = "Mechanics";
 
@@ -441,6 +443,7 @@ function render() {
 
   renderTrend(points);
   renderRadar(activeProfile, selectedRows, selectedSubject);
+  renderPrintRadars(radarProfiles);
   renderCurve(latestRawScore, selectedRows.at(-1).maxScore, selectedSubject, selectedQualification);
   renderPerformanceAnnotations(weakestSkill, strongestSkill, selectedSubject);
   renderTopicMap(selectedRows, selectedSubject);
@@ -559,6 +562,12 @@ function renderTrend(points) {
   const labels = [...points.map((point) => `W${point.week}`), ...forecasts.labels];
   const actual = [...points.map((point) => point.score), ...Array(forecasts.labels.length).fill(null)];
   const baseNulls = Array(points.length - 1).fill(null);
+  const forecastBaseNulls = Array(points.length - 1).fill(null);
+  const trendOptions = chartOptions({
+    y: { min: 0, max: 100, title: "Score %" },
+    x: { title: "Assessment week" }
+  });
+  trendOptions.plugins.legend.labels.filter = (item) => item.text !== "Expected range lower";
 
   trendChart?.destroy();
   trendChart = new Chart(document.querySelector("#trendChart"), {
@@ -567,15 +576,31 @@ function renderTrend(points) {
       labels,
       datasets: [
         lineDataset("Actual score", "#2563eb", actual, 3),
+        {
+          label: "Expected range (+/- 1 SD)",
+          data: [...forecastBaseNulls, ...forecasts.upperBand],
+          borderColor: "rgba(192, 95, 24, 0)",
+          backgroundColor: "rgba(192, 95, 24, 0.14)",
+          pointRadius: 0,
+          tension: 0.38,
+          fill: "+1",
+          spanGaps: true
+        },
+        {
+          label: "Expected range lower",
+          data: [...forecastBaseNulls, ...forecasts.lowerBand],
+          borderColor: "rgba(192, 95, 24, 0)",
+          backgroundColor: "rgba(192, 95, 24, 0.14)",
+          pointRadius: 0,
+          tension: 0.38,
+          spanGaps: true
+        },
         lineDataset("Conservative forecast", "#1f8a52", [...baseNulls, ...forecasts.conservative], 2),
         lineDataset("Expected forecast", "#c05f18", [...baseNulls, ...forecasts.expected], 2),
         lineDataset("Optimistic forecast", "#d99a1c", [...baseNulls, ...forecasts.optimistic], 2)
       ]
     },
-    options: chartOptions({
-      y: { min: 0, max: 100, title: "Score %" },
-      x: { title: "Assessment week" }
-    })
+    options: trendOptions
   });
 }
 
@@ -583,6 +608,7 @@ function buildForecast(points) {
   const latest = points.at(-1).score;
   const recent = points.slice(-4).map((point) => point.score);
   const slope = Math.max(-1.2, Math.min(2.4, averageDelta(recent)));
+  const volatility = Math.max(3, standardDeviation(recent));
   const weeks = 8;
   const labels = Array.from({ length: weeks }, (_, index) => `W${points.length + index + 1}`);
   const path = (multiplier) => {
@@ -593,11 +619,14 @@ function buildForecast(points) {
     }
     return values;
   };
+  const expected = path(1);
   return {
     labels,
     conservative: path(0.55),
-    expected: path(1),
-    optimistic: path(1.55)
+    expected,
+    optimistic: path(1.55),
+    lowerBand: expected.map((value, index) => Math.max(0, value - volatility * Math.sqrt(Math.max(1, index)) * 0.55)),
+    upperBand: expected.map((value, index) => Math.min(100, value + volatility * Math.sqrt(Math.max(1, index)) * 0.55))
   };
 }
 
@@ -663,6 +692,64 @@ function renderRadar(profile, selectedRows, subject) {
   });
 
   renderTopicDetail(selectedRows, selectedDrillTopic, profile, isPhysics);
+}
+
+function renderPrintRadars(radarProfiles) {
+  printTopicRadarChart?.destroy();
+  printQuestionRadarChart?.destroy();
+
+  printTopicRadarChart = createRadarChart(
+    document.querySelector("#printTopicRadarChart"),
+    radarProfiles.topic,
+    "Topic ability"
+  );
+  printQuestionRadarChart = createRadarChart(
+    document.querySelector("#printQuestionRadarChart"),
+    radarProfiles.question,
+    "Question-type ability"
+  );
+}
+
+function createRadarChart(canvas, profile, label) {
+  if (!canvas) return null;
+  const labels = [...profile.keys()];
+  const values = [...profile.values()].map((value) => Math.round(value));
+  return new Chart(canvas, {
+    type: "radar",
+    data: {
+      labels,
+      datasets: [
+        {
+          label,
+          data: values,
+          backgroundColor: "rgba(37, 99, 235, 0.18)",
+          borderColor: "#2563eb",
+          pointBackgroundColor: "#2563eb",
+          borderWidth: 2
+        }
+      ]
+    },
+    options: radarChartOptions()
+  });
+}
+
+function radarChartOptions() {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: {
+      r: {
+        min: 0,
+        max: 100,
+        ticks: { stepSize: 20, backdropColor: "transparent" },
+        grid: { color: "#d8dee8" },
+        pointLabels: { color: "#17202a", font: { weight: 700 } }
+      }
+    },
+    plugins: {
+      legend: { display: false }
+    }
+  };
 }
 
 function renderTopicDetail(selectedRows, topic, profile, isPhysics = true) {
@@ -1190,6 +1277,13 @@ function erf(value) {
   const t = 1 / (1 + p * x);
   const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
   return sign * y;
+}
+
+function standardDeviation(values) {
+  if (values.length < 2) return 3;
+  const meanValue = average(values);
+  const variance = average(values.map((value) => (value - meanValue) ** 2));
+  return Math.sqrt(variance);
 }
 
 function average(values) {

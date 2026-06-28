@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260628-print-a4" />
   </head>
   <body>
     <main class="app-shell">
@@ -125,7 +125,7 @@
             </div>
           </article>
 
-          <article class="chart-panel">
+          <article class="chart-panel interactive-radar-panel">
             <div class="panel-heading">
               <div>
                 <h2 id="radarHeading">Ability Radar</h2>
@@ -140,6 +140,29 @@
               <canvas id="radarChart"></canvas>
             </div>
             <div class="topic-detail" id="topicDetail"></div>
+          </article>
+
+          <article class="chart-panel print-radar-panel wide-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Ability Radar</h2>
+                <p>Topic and question-type profiles for print.</p>
+              </div>
+            </div>
+            <div class="print-radar-grid">
+              <div>
+                <h3>By Topic</h3>
+                <div class="chart-frame print-radar-frame">
+                  <canvas id="printTopicRadarChart"></canvas>
+                </div>
+              </div>
+              <div>
+                <h3>By Question Type</h3>
+                <div class="chart-frame print-radar-frame">
+                  <canvas id="printQuestionRadarChart"></canvas>
+                </div>
+              </div>
+            </div>
           </article>
 
           <article class="chart-panel wide">
@@ -204,6 +227,6 @@
     </main>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-    <script src="./app.js"></script>
+    <script src="./app.js?v=20260628-print-a4"></script>
   </body>
 </html>

@@ -319,6 +319,10 @@ h1 {
   grid-column: 1 / -1;
 }
 
+.print-radar-panel {
+  display: none !important;
+}
+
 .panel-heading {
   display: flex;
   align-items: flex-start;
@@ -361,6 +365,21 @@ h1 {
   position: relative;
   height: 350px;
   min-width: 0;
+}
+
+.print-radar-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.print-radar-grid h3 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+}
+
+.print-radar-frame {
+  height: 320px;
 }
 
 .trend-frame,
@@ -679,12 +698,21 @@ h1 {
 }
 
 @media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
   body {
     background: #fff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 
   .sidebar,
-  .topbar-actions {
+  .topbar-actions,
+  #radarModeControls,
+  #topicDetail {
     display: none;
   }
 
@@ -694,6 +722,19 @@ h1 {
 
   .workspace {
     padding: 0;
+  }
+
+  h1 {
+    font-size: 24pt;
+  }
+
+  .topbar {
+    margin-bottom: 12px;
+  }
+
+  .summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
   }
 
   .summary-grid,
@@ -706,5 +747,68 @@ h1 {
   .summary-grid article {
     box-shadow: none;
     break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .chart-panel,
+  .report-panel {
+    padding: 12px;
+  }
+
+  .chart-frame,
+  .trend-frame,
+  .curve-frame {
+    height: 260px;
+  }
+
+  .interactive-radar-panel {
+    display: none;
+  }
+
+  .print-radar-panel {
+    display: block !important;
+  }
+
+  .print-radar-frame {
+    height: 245px;
+  }
+
+  .table-wrap {
+    overflow: visible;
+  }
+
+  .insight-table,
+  .heatmap-table,
+  .boundary-table,
+  .difficulty-table {
+    min-width: 0;
+    font-size: 8.5pt;
+  }
+
+  .insight-table th,
+  .insight-table td,
+  .heatmap-table th,
+  .heatmap-table td,
+  .boundary-table th,
+  .boundary-table td,
+  .difficulty-table th,
+  .difficulty-table td {
+    padding: 6px;
+  }
+
+  .status-pill,
+  .confidence-pill {
+    min-height: 20px;
+    padding: 0 6px;
+    font-size: 7.5pt;
+  }
+
+  .boundary-summary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  #reportText {
+    min-height: 260px;
+    font-size: 9pt;
   }
 }
