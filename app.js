@@ -277,8 +277,9 @@ subjectSelect.addEventListener("change", render);
 qualificationSelect.addEventListener("change", render);
 document.querySelectorAll("#radarModeControls button").forEach((button) => {
   button.addEventListener("click", () => {
+    if (radarMode === button.dataset.mode) return;
     radarMode = button.dataset.mode;
-    render();
+    renderRadarSectionOnly();
   });
 });
 
@@ -395,9 +396,7 @@ function optionMarkup(value) {
 function render() {
   const selectedStudent = studentSelect.value;
   const selectedSubject = subjectSelect.value;
-  const selectedRows = rows
-    .filter((row) => row.student === selectedStudent && row.subject === selectedSubject)
-    .sort((a, b) => new Date(a.date) - new Date(b.date));
+  const selectedRows = getSelectedRows();
 
   if (!selectedRows.length) return;
 
@@ -445,6 +444,24 @@ function render() {
   renderHeatmap(selectedRows, selectedSubject);
   renderDifficultyPanel(selectedRows);
   reportText.value = generateReport(selectedStudent, selectedSubject, points, grade, weakestSkill, activeProfile);
+}
+
+function getSelectedRows() {
+  const selectedStudent = studentSelect.value;
+  const selectedSubject = subjectSelect.value;
+  return rows
+    .filter((row) => row.student === selectedStudent && row.subject === selectedSubject)
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+}
+
+function renderRadarSectionOnly() {
+  const selectedRows = getSelectedRows();
+  if (!selectedRows.length) return;
+
+  const selectedSubject = subjectSelect.value;
+  const radarProfiles = buildRadarProfiles(selectedRows, selectedSubject);
+  const activeProfile = radarMode === "question" ? radarProfiles.question : radarProfiles.topic;
+  renderRadar(activeProfile, selectedRows, selectedSubject);
 }
 
 function buildSkillAverages(selectedRows) {
