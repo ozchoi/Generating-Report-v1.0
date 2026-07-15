@@ -194,3 +194,77 @@ test("grade and parent report avoid unsupported percentile claims", () => {
   assert.equal(report.gradeEvidence.available, false);
   assert.equal(JSON.stringify(evidence).toLowerCase().includes("percentile"), false);
 });
+
+test("true-false marking normalises accepted values", () => {
+  const question = { questionType: "TrueFalse", correctAnswer: "True", maximumMark: 1 };
+  assert.equal(core.normaliseTrueFalse("T"), true);
+  assert.equal(core.normaliseTrueFalse("false"), false);
+  assert.equal(core.markTrueFalse(question, "TRUE").markAwarded, 1);
+  assert.equal(core.markTrueFalse(question, "F").markAwarded, 0);
+});
+
+test("MCQ marking attaches distractor error code", () => {
+  const question = {
+    questionType: "MCQ",
+    maximumMark: 1,
+    options: [
+      { label: "A", isCorrect: false, errorCode: "Misconception" },
+      { label: "B", isCorrect: true }
+    ]
+  };
+  const result = core.markMcq(question, "A");
+  assert.equal(result.markAwarded, 0);
+  assert.equal(result.errorCodes[0], "Misconception");
+});
+
+test("student response upsert prevents duplicate question responses", () => {
+  const first = { id: "R1", testSessionId: "S1", questionId: "Q1", answer: "A" };
+  const second = { id: "R2", testSessionId: "S1", questionId: "Q1", answer: "B" };
+  const rows = core.upsertStudentResponse(core.upsertStudentResponse([], first), second);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, "R1");
+  assert.equal(rows[0].answer, "B");
+});
+
+test("Chemistry centre sample totals 36 questions and 48 marks", () => {
+  const state = core.createCentreSampleSystem();
+  const summary = core.templateSummary(state, "TEST-CHEM-TRIAL-001");
+  assert.equal(summary.questionCount, 36);
+  assert.equal(summary.maximumMark, 48);
+  assert.equal(summary.topicCount, 12);
+});
+
+test("test mode payload excludes correct answers and mark schemes", () => {
+  const state = core.createCentreSampleSystem();
+  const session = core.createTestSession(state, "STU-001", "TEST-CHEM-TRIAL-001", new Date("2026-07-16T12:00:00Z"));
+  const payload = core.buildTestModePayload(state, session.id);
+  assert.equal(payload.questions.length, 36);
+  assert.equal(payload.questions.some((question) => Object.prototype.hasOwnProperty.call(question, "correctAnswer")), false);
+  assert.equal(payload.questions.some((question) => Object.prototype.hasOwnProperty.call(question, "markingPoints")), false);
+  assert.equal(payload.questions.flatMap((question) => question.options).some((option) => Object.prototype.hasOwnProperty.call(option, "isCorrect")), false);
+});
+
+test("timer recovery uses stored server deadline", () => {
+  const state = core.createCentreSampleSystem();
+  const session = core.createTestSession(state, "STU-001", "TEST-CHEM-TRIAL-001", new Date("2026-07-16T12:00:00Z"));
+  assert.equal(core.recoverTimeRemaining(session, new Date("2026-07-16T12:10:00Z")), 1200);
+  assert.equal(core.recoverTimeRemaining(session, new Date("2026-07-16T12:31:00Z")), 0);
+});
+
+test("submitted test session produces one assessment progress point", () => {
+  const state = core.createCentreSampleSystem();
+  const session = core.createTestSession(state, "STU-001", "TEST-CHEM-TRIAL-001", new Date("2026-07-16T12:00:00Z"));
+  state.studentResponses = state.studentResponses.map((response) => response.testSessionId === session.id ? { ...response, answer: "B" } : response);
+  core.markSubmittedSession(state, session.id, new Date("2026-07-16T12:20:00Z"));
+  const evidence = core.buildCentreReportEvidence(state, session.id);
+  assert.equal(evidence.assessmentHistory.filter((item) => item.assessmentId === session.id).length, 1);
+});
+
+test("report snapshot is saved from structured centre evidence", () => {
+  const state = core.createCentreSampleSystem();
+  const session = state.testSessions.find((item) => item.id === "SESSION-DEMO-001");
+  const snapshot = core.buildReportSnapshotFromState(state, session.id, "Final");
+  assert.equal(snapshot.studentId, "STU-001");
+  assert.equal(snapshot.evidenceJson.latestSession.id, session.id);
+  assert.ok(snapshot.generatedNarrative.includes("Parent Report"));
+});

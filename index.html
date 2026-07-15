@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=20260715-question-level" />
+    <link rel="stylesheet" href="./styles.css?v=20260716-centre-system" />
   </head>
   <body>
     <main class="app-shell">
@@ -88,7 +88,7 @@
       <section class="workspace">
         <header class="topbar">
           <div>
-            <p class="eyebrow">Parent-ready learning analytics</p>
+            <p class="eyebrow">Centre-operated assessment system</p>
             <h1 id="pageTitle">Student Performance Report</h1>
           </div>
           <div class="topbar-actions">
@@ -96,6 +96,125 @@
             <button id="exportReport" type="button">Export text</button>
           </div>
         </header>
+
+        <section class="centre-system" id="centreSystem">
+          <div class="module-nav" aria-label="Assessment System modules">
+            <button type="button" data-module="dashboard" class="active">Assessment System</button>
+            <button type="button" data-module="questionBank">Question Bank / 題目庫</button>
+            <button type="button" data-module="testBuilder">Test Builder / 試卷建立</button>
+            <button type="button" data-module="startTest">Start Test / 開始測驗</button>
+            <button type="button" data-module="sessions">Test Sessions / 測驗記錄</button>
+            <button type="button" data-module="marking">Marking / 批改</button>
+            <button type="button" data-module="reports">Student Reports / 學生報告</button>
+          </div>
+
+          <article class="module-panel" id="module-dashboard">
+            <div class="panel-heading">
+              <div>
+                <h2>Centre Dashboard</h2>
+                <p>Fast staff workflow: select a student, start a test, mark, and generate a report.</p>
+              </div>
+            </div>
+            <div class="quick-actions">
+              <button type="button" data-jump-module="startTest">Start a Test</button>
+              <button type="button" data-jump-module="testBuilder">Create a Test</button>
+              <button type="button" data-jump-module="questionBank">Question Bank</button>
+              <button type="button" data-jump-module="marking">Continue Marking</button>
+              <button type="button" data-jump-module="reports">View Student Reports</button>
+            </div>
+            <div id="sessionRecoveryPanel" class="recovery-panel"></div>
+            <div class="table-wrap">
+              <table class="insight-table" id="recentSessionsTable"></table>
+            </div>
+          </article>
+
+          <article class="module-panel" id="module-startTest" hidden>
+            <div class="panel-heading">
+              <div>
+                <h2>Start Test / 開始測驗</h2>
+                <p>Select an existing student, select a published test, then hand the centre device to the student.</p>
+              </div>
+            </div>
+            <div class="workflow-grid">
+              <section class="workflow-card">
+                <span class="step-label">Step 1</span>
+                <h3>Select Student / 選擇學生</h3>
+                <input id="studentSearchInput" type="search" placeholder="Search name, Chinese name, phone, school, or student ID" />
+                <div id="studentSearchResults" class="selection-list"></div>
+              </section>
+              <section class="workflow-card">
+                <span class="step-label">Step 2</span>
+                <h3>Select Test / 選擇試卷</h3>
+                <div id="testTemplateList" class="selection-list"></div>
+              </section>
+              <section class="workflow-card">
+                <span class="step-label">Step 3</span>
+                <h3>Confirm Session</h3>
+                <div id="startTestSummary" class="session-summary"></div>
+                <div class="actions single-action">
+                  <button id="startSelectedTest" type="button">Start Test</button>
+                </div>
+              </section>
+            </div>
+          </article>
+
+          <article class="module-panel" id="module-questionBank" hidden>
+            <div class="panel-heading">
+              <div>
+                <h2>Question Bank / 題目庫</h2>
+                <p>Search reusable questions. Published used questions are version-safe in test sessions.</p>
+              </div>
+            </div>
+            <div class="filter-row">
+              <input id="questionSearchInput" type="search" placeholder="Search topic, subtopic, question type, or content" />
+              <select id="questionDifficultyFilter"></select>
+              <select id="questionTypeFilter"></select>
+            </div>
+            <div id="questionBankList" class="question-bank-list"></div>
+          </article>
+
+          <article class="module-panel" id="module-testBuilder" hidden>
+            <div class="panel-heading">
+              <div>
+                <h2>Test Builder / 試卷建立</h2>
+                <p>Build, validate, preview, and publish centre tests from the same question bank.</p>
+              </div>
+            </div>
+            <div id="testBuilderPanel" class="builder-grid"></div>
+          </article>
+
+          <article class="module-panel" id="module-sessions" hidden>
+            <div class="panel-heading">
+              <div>
+                <h2>Test Sessions / 測驗記錄</h2>
+                <p>One submitted session creates one assessment-progress point.</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="insight-table" id="allSessionsTable"></table>
+            </div>
+          </article>
+
+          <article class="module-panel" id="module-marking" hidden>
+            <div class="panel-heading">
+              <div>
+                <h2>Marking / 批改</h2>
+                <p>Objective questions are auto-marked; written answers require staff review.</p>
+              </div>
+            </div>
+            <div id="markingPanel" class="marking-panel"></div>
+          </article>
+
+          <article class="module-panel" id="module-reports" hidden>
+            <div class="panel-heading">
+              <div>
+                <h2>Student Reports / 學生報告</h2>
+                <p>Report snapshots retain the evidence and generated narrative used at creation time.</p>
+              </div>
+            </div>
+            <div id="reportSnapshotList" class="selection-list"></div>
+          </article>
+        </section>
 
         <section class="summary-grid" aria-label="student summary">
           <article>
@@ -257,6 +376,42 @@
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="./app.js?v=20260715-question-level"></script>
+    <section id="testMode" class="test-mode" hidden>
+      <div class="test-mode-shell">
+        <header class="test-mode-header">
+          <div>
+            <p id="testModeStudent" class="eyebrow">Student</p>
+            <h1 id="testModeTitle">Test Mode</h1>
+          </div>
+          <div class="test-status">
+            <strong id="testTimer">--:--</strong>
+            <span id="autosaveStatus">Saved / 已儲存</span>
+          </div>
+        </header>
+        <div class="test-progress">
+          <div id="testProgressBar"></div>
+        </div>
+        <main class="test-layout">
+          <aside id="testQuestionNav" class="test-question-nav"></aside>
+          <section class="test-question-card">
+            <div id="testQuestionContent"></div>
+            <div id="testAnswerArea" class="test-answer-area"></div>
+            <div class="test-controls">
+              <button id="prevQuestion" type="button">Previous</button>
+              <button id="flagQuestion" type="button">Flag Question / 標記題目</button>
+              <button id="nextQuestion" type="button">Next</button>
+              <button id="submitTest" type="button">Submit Test / 提交測驗</button>
+            </div>
+          </section>
+        </main>
+      </div>
+      <div id="completionScreen" class="completion-screen" hidden>
+        <h2>Test submitted successfully</h2>
+        <p>Your answers have been saved. Please return the device to the centre staff.</p>
+        <button id="returnToDashboard" type="button">Return to Centre Dashboard / 返回中心系統</button>
+      </div>
+    </section>
+
+    <script src="./app.js?v=20260716-centre-system"></script>
   </body>
 </html>

@@ -38,6 +38,7 @@ const DIFFICULTY_WEIGHTS = {
   Challenge: 1.5
 };
 const REPORT_DATE = new Date("2026-10-15T00:00:00");
+const CENTRE_STORAGE_KEY = "abilityReportCentreSystemV1";
 
 let assessments = [];
 let questions = [];
@@ -50,6 +51,14 @@ let radarChart;
 let curveChart;
 let printTopicRadarChart;
 let printQuestionRadarChart;
+let centreState = null;
+let selectedCentreStudentId = null;
+let selectedTestTemplateId = null;
+let activeSessionId = null;
+let activeQuestionIndex = 0;
+let activeTestPayload = null;
+let testTimerInterval = null;
+const responseSaveTimers = new Map();
 
 const hasDom = typeof document !== "undefined";
 const elements = hasDom ? {
@@ -93,6 +102,7 @@ if (hasDom) {
   loadSampleData();
   renderSelectors();
   render();
+  initCentreSystem();
 }
 
 function loadSampleData() {
@@ -104,6 +114,1188 @@ function loadSampleData() {
   elements.assessmentFileStatus.textContent = "Sample: 1 Chemistry baseline assessment loaded";
   elements.blueprintFileStatus.textContent = "Sample: 36-question blueprint loaded";
   elements.responsesFileStatus.textContent = "Sample: 36 student responses loaded";
+}
+
+function initCentreSystem() {
+  centreState = loadCentreState() || createCentreSampleSystem();
+  selectedCentreStudentId = centreState.students[0]?.studentId ?? null;
+  selectedTestTemplateId = centreState.testTemplates.find((item) => item.status === "Published")?.id ?? centreState.testTemplates[0]?.id ?? null;
+  bindCentreEvents();
+  renderCentreSystem();
+}
+
+function bindCentreEvents() {
+  document.querySelectorAll("[data-module]").forEach((button) => {
+    button.addEventListener("click", () => showCentreModule(button.dataset.module));
+  });
+  document.querySelectorAll("[data-jump-module]").forEach((button) => {
+    button.addEventListener("click", () => showCentreModule(button.dataset.jumpModule));
+  });
+  document.querySelector("#studentSearchInput")?.addEventListener("input", renderStartTestModule);
+  document.querySelector("#questionSearchInput")?.addEventListener("input", renderQuestionBank);
+  document.querySelector("#questionDifficultyFilter")?.addEventListener("change", renderQuestionBank);
+  document.querySelector("#questionTypeFilter")?.addEventListener("change", renderQuestionBank);
+  document.querySelector("#studentSearchResults")?.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-student-id]");
+    if (!item) return;
+    selectedCentreStudentId = item.dataset.studentId;
+    renderStartTestModule();
+  });
+  document.querySelector("#testTemplateList")?.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-template-id]");
+    if (!item) return;
+    selectedTestTemplateId = item.dataset.templateId;
+    renderStartTestModule();
+  });
+  document.querySelector("#startSelectedTest")?.addEventListener("click", () => {
+    if (!selectedCentreStudentId || !selectedTestTemplateId) return;
+    const session = createTestSession(centreState, selectedCentreStudentId, selectedTestTemplateId, new Date());
+    persistCentreState();
+    renderCentreSystem();
+    openTestMode(session.id);
+  });
+  document.querySelector("#recentSessionsTable")?.addEventListener("click", handleSessionAction);
+  document.querySelector("#allSessionsTable")?.addEventListener("click", handleSessionAction);
+  document.querySelector("#sessionRecoveryPanel")?.addEventListener("click", handleSessionAction);
+  document.querySelector("#markingPanel")?.addEventListener("click", handleMarkingAction);
+  document.querySelector("#markingPanel")?.addEventListener("input", handleMarkInput);
+  document.querySelector("#reportSnapshotList")?.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-report-id]");
+    if (!item) return;
+    const snapshot = centreState.reportSnapshots.find((report) => report.id === item.dataset.reportId);
+    if (snapshot) renderEvidenceSnapshot(snapshot.evidenceJson, snapshot.editedNarrative || snapshot.generatedNarrative);
+  });
+  document.querySelector("#prevQuestion")?.addEventListener("click", () => moveTestQuestion(-1));
+  document.querySelector("#nextQuestion")?.addEventListener("click", () => moveTestQuestion(1));
+  document.querySelector("#flagQuestion")?.addEventListener("click", toggleCurrentQuestionFlag);
+  document.querySelector("#submitTest")?.addEventListener("click", () => submitActiveTest(false));
+  document.querySelector("#returnToDashboard")?.addEventListener("click", () => closeTestMode("dashboard"));
+}
+
+function loadCentreState() {
+  if (typeof localStorage === "undefined") return null;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CENTRE_STORAGE_KEY));
+    return parsed?.version === 1 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistCentreState() {
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem(CENTRE_STORAGE_KEY, JSON.stringify(centreState));
+  }
+}
+
+function createCentreSampleSystem() {
+  const sample = createChemistrySample();
+  const now = "2026-07-16T10:30:00.000Z";
+  const students = [{
+    studentId: "STU-001",
+    studentName: "Amelia Chan",
+    chineseName: "陳雅麗",
+    contactNumber: "9123 4567",
+    school: "Harbour College",
+    schoolYear: "Year 10",
+    programme: "IGCSE Chemistry"
+  }];
+  const questionBank = sample.questions.map((question) => createCentreQuestion(question, now));
+  const testTemplate = {
+    id: "TEST-CHEM-TRIAL-001",
+    name: "IGCSE Chemistry Trial Test (Mixed Difficulty)",
+    description: "36-question baseline diagnostic test for IGCSE Chemistry.",
+    subjectName: "Chemistry",
+    qualification: "IGCSE",
+    examBoard: "Cambridge",
+    syllabusCode: "0620",
+    testType: "Baseline diagnostic",
+    instructions: "Answer all questions. Use the flag button if you want to return to a question.",
+    timeLimitMinutes: 30,
+    status: "Published",
+    createdAt: now,
+    updatedAt: now
+  };
+  const testSections = ["A", "B", "C"].map((section, index) => ({
+    id: `SECTION-${section}`,
+    testTemplateId: testTemplate.id,
+    title: section === "A" ? "Section A — Multiple Choice" : section === "B" ? "Section B — True / False" : "Section C — Short Answer",
+    instructions: section === "C" ? "Write concise scientific answers. Staff will review these responses." : "Select the best answer.",
+    order: index + 1,
+    questionRefs: questionBank
+      .filter((question) => question.section === section)
+      .map((question, order) => ({ questionId: question.id, questionVersion: question.version, order: order + 1 }))
+  }));
+  const demoSession = {
+    id: "SESSION-DEMO-001",
+    studentId: "STU-001",
+    testTemplateId: testTemplate.id,
+    testName: testTemplate.name,
+    subjectName: testTemplate.subjectName,
+    status: "Report generated",
+    startedAt: "2026-07-16T10:30:00.000Z",
+    submittedAt: "2026-07-16T10:54:00.000Z",
+    markedAt: "2026-07-16T11:08:00.000Z",
+    reportGeneratedAt: "2026-07-16T11:12:00.000Z",
+    timeLimitMinutes: 30,
+    serverDeadline: "2026-07-16T11:00:00.000Z",
+    timeUsedSeconds: 1440,
+    createdAt: "2026-07-16T10:30:00.000Z",
+    updatedAt: "2026-07-16T11:12:00.000Z"
+  };
+  const studentResponses = sample.responses.map((response) => {
+    const question = questionBank.find((item) => item.id === response.questionId);
+    return {
+      id: `RESP-${demoSession.id}-${response.questionId}`,
+      testSessionId: demoSession.id,
+      studentId: demoSession.studentId,
+      questionId: response.questionId,
+      questionVersion: 1,
+      answer: answerFromSample(response, question),
+      firstViewedAt: demoSession.startedAt,
+      lastSavedAt: demoSession.submittedAt,
+      timeSpentSeconds: 35,
+      answerChangeCount: response.markAwarded === question.maximumMark ? 1 : 2,
+      flagged: false,
+      markAwarded: response.markAwarded,
+      maximumMark: response.maximumMark,
+      markingMethod: questionRequiresStaffReview(question) ? "Staff reviewed" : "Automatic",
+      markingConfidence: questionRequiresStaffReview(question) ? 0.95 : 1,
+      errorCodes: response.errorCode ? [normaliseCentreErrorCode(response.errorCode)] : [],
+      feedback: response.tutorFeedback || "",
+      internalNote: "",
+      markedAt: demoSession.markedAt,
+      createdAt: demoSession.startedAt,
+      updatedAt: demoSession.markedAt
+    };
+  });
+  const state = {
+    version: 1,
+    students,
+    questions: questionBank,
+    testTemplates: [testTemplate],
+    testSections,
+    testSessions: [demoSession],
+    studentResponses,
+    reportSnapshots: []
+  };
+  updateSessionScore(state, demoSession.id);
+  state.reportSnapshots.push(buildReportSnapshotFromState(state, demoSession.id, "Final"));
+  return state;
+}
+
+function createCentreQuestion(question, timestamp) {
+  const questionType = question.questionType === "MCQ" ? "MCQ" : question.questionType === "True / False" ? "TrueFalse" : "ShortAnswer";
+  const prompt = questionType === "ShortAnswer"
+    ? `${question.topic}: explain ${question.subtopic.toLowerCase()}.`
+    : `${question.topic}: ${question.subtopic}.`;
+  return {
+    id: question.questionId,
+    section: question.section,
+    subjectName: "Chemistry",
+    qualification: "IGCSE",
+    examBoard: "Cambridge",
+    syllabusCode: "0620",
+    topic: question.topic,
+    subtopic: question.subtopic,
+    difficulty: normaliseDifficulty(question.difficulty),
+    questionType,
+    title: `${question.section}${question.questionNumber} ${question.topic}`,
+    questionContent: { prompt },
+    maximumMark: question.maximumMark,
+    options: questionType === "MCQ" ? ["A", "B", "C", "D"].map((label) => ({
+      id: `${question.questionId}-${label}`,
+      label,
+      content: `${label}`,
+      isCorrect: normaliseAnswer(label) === normaliseAnswer(question.correctAnswer),
+      errorCode: normaliseAnswer(label) === normaliseAnswer(question.correctAnswer) ? "" : "Misconception"
+    })) : questionType === "TrueFalse" ? ["True", "False"].map((label) => ({
+      id: `${question.questionId}-${label}`,
+      label,
+      content: label,
+      isCorrect: normaliseTrueFalse(label) === normaliseTrueFalse(question.correctAnswer),
+      errorCode: normaliseTrueFalse(label) === normaliseTrueFalse(question.correctAnswer) ? "" : "Question interpretation"
+    })) : [],
+    correctAnswer: question.correctAnswer,
+    acceptedAnswers: question.correctAnswer ? [question.correctAnswer] : [],
+    markingPoints: questionType === "ShortAnswer" ? [
+      { id: `${question.questionId}-MP1`, description: `Correct chemistry idea for ${question.subtopic}`, markValue: 1, acceptedConcepts: [question.topic, question.subtopic] },
+      { id: `${question.questionId}-MP2`, description: "Linked explanation using scientific wording", markValue: 1, acceptedConcepts: ["because", "therefore", "particles", "ions", "energy"] }
+    ] : [],
+    numericalTolerance: question.numericalTolerance,
+    requiredUnit: question.requiredUnit,
+    distractorErrors: {},
+    assessmentObjective: null,
+    coreOrSupplement: "Both",
+    source: "Centre-created IGCSE Chemistry trial sample",
+    copyrightNote: "Internal teaching sample.",
+    status: "Published",
+    usageCount: 1,
+    version: 1,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+}
+
+function renderCentreSystem() {
+  renderDashboardModule();
+  renderStartTestModule();
+  renderQuestionFilters();
+  renderQuestionBank();
+  renderTestBuilder();
+  renderSessionsModule();
+  renderMarkingModule();
+  renderReportsModule();
+}
+
+function showCentreModule(moduleName) {
+  document.querySelectorAll("[id^='module-']").forEach((panel) => {
+    panel.hidden = panel.id !== `module-${moduleName}`;
+  });
+  document.querySelectorAll("[data-module]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.module === moduleName);
+  });
+  if (moduleName === "marking") renderMarkingModule();
+  if (moduleName === "reports") renderReportsModule();
+}
+
+function renderDashboardModule() {
+  const recovery = getUnfinishedSession(centreState);
+  const recoveryPanel = document.querySelector("#sessionRecoveryPanel");
+  recoveryPanel.innerHTML = recovery ? `
+    <div class="panel-heading">
+      <div>
+        <h2>Unfinished test session detected</h2>
+        <p>${escapeHtml(studentById(recovery.studentId).studentName)} — ${escapeHtml(recovery.testName)}. Time remaining: ${formatRemaining(recoverTimeRemaining(recovery, new Date()))}</p>
+      </div>
+      <div class="topbar-actions">
+        <button type="button" data-session-action="resume" data-session-id="${recovery.id}">Resume Test</button>
+        <button type="button" data-session-action="cancel" data-session-id="${recovery.id}">Cancel Session</button>
+      </div>
+    </div>` : "";
+  document.querySelector("#recentSessionsTable").innerHTML = sessionsTable(centreState.testSessions.slice(0, 6));
+}
+
+function renderStartTestModule() {
+  const query = text(document.querySelector("#studentSearchInput")?.value).toLowerCase();
+  const students = centreState.students.filter((student) => {
+    const haystack = [student.studentId, student.studentName, student.chineseName, student.contactNumber, student.school, student.schoolYear, student.programme].join(" ").toLowerCase();
+    return !query || haystack.includes(query);
+  });
+  document.querySelector("#studentSearchResults").innerHTML = students.map((student) => `
+    <button type="button" class="selection-item ${student.studentId === selectedCentreStudentId ? "selected" : ""}" data-student-id="${student.studentId}">
+      <strong>${escapeHtml(student.studentName)} ${escapeHtml(student.chineseName)}</strong>
+      <p>${escapeHtml(student.school)} · ${escapeHtml(student.schoolYear)} · ${escapeHtml(student.programme)}</p>
+      <p>${escapeHtml(student.studentId)} · ${escapeHtml(student.contactNumber)}</p>
+    </button>`).join("");
+  const templates = centreState.testTemplates.filter((template) => template.status === "Published");
+  document.querySelector("#testTemplateList").innerHTML = templates.map((template) => {
+    const summary = templateSummary(centreState, template.id);
+    return `<button type="button" class="selection-item ${template.id === selectedTestTemplateId ? "selected" : ""}" data-template-id="${template.id}">
+      <strong>${escapeHtml(template.name)}</strong>
+      <p>${escapeHtml(template.subjectName)} · ${escapeHtml(template.testType)} · ${summary.questionCount} questions · ${summary.maximumMark} marks · ${template.timeLimitMinutes} minutes</p>
+      <p>Last used: ${escapeHtml(lastUsedLabel(template.id))}</p>
+    </button>`;
+  }).join("");
+  const student = selectedCentreStudentId ? studentById(selectedCentreStudentId) : null;
+  const template = selectedTestTemplateId ? templateById(selectedTestTemplateId) : null;
+  const summary = template ? templateSummary(centreState, template.id) : null;
+  document.querySelector("#startTestSummary").innerHTML = student && template ? `
+    <div class="boundary-summary">
+      <div><span>Student</span><strong>${escapeHtml(student.studentName)}</strong></div>
+      <div><span>Test</span><strong>${escapeHtml(template.name)}</strong></div>
+      <div><span>Subject</span><strong>${escapeHtml(template.subjectName)}</strong></div>
+      <div><span>Questions</span><strong>${summary.questionCount}</strong></div>
+      <div><span>Maximum marks</span><strong>${summary.maximumMark}</strong></div>
+      <div><span>Time limit</span><strong>${template.timeLimitMinutes} min</strong></div>
+    </div>` : "<p>Select one student and one published test.</p>";
+}
+
+function renderQuestionFilters() {
+  document.querySelector("#questionDifficultyFilter").innerHTML = `<option value="">All difficulties</option>${DIFFICULTIES.map((item) => `<option value="${item}">${item}</option>`).join("")}`;
+  const types = ["MCQ", "TrueFalse", "ShortAnswer", "StructuredCalculation", "Numerical", "ChemicalEquation", "DataInterpretation", "GraphInterpretation", "PracticalPlanning", "LongApplication"];
+  document.querySelector("#questionTypeFilter").innerHTML = `<option value="">All question types</option>${types.map((item) => `<option value="${item}">${item}</option>`).join("")}`;
+}
+
+function renderQuestionBank() {
+  const query = text(document.querySelector("#questionSearchInput")?.value).toLowerCase();
+  const difficulty = document.querySelector("#questionDifficultyFilter")?.value || "";
+  const questionType = document.querySelector("#questionTypeFilter")?.value || "";
+  const questionsToShow = centreState.questions.filter((question) => {
+    const haystack = [question.title, question.topic, question.subtopic, question.questionType, question.questionContent.prompt].join(" ").toLowerCase();
+    return (!query || haystack.includes(query)) && (!difficulty || question.difficulty === difficulty) && (!questionType || question.questionType === questionType);
+  });
+  document.querySelector("#questionBankList").innerHTML = questionsToShow.map((question) => `
+    <article class="question-card">
+      <h3>${escapeHtml(question.title)}</h3>
+      <p>${escapeHtml(question.questionContent.prompt)}</p>
+      <div class="question-meta">
+        <span class="meta-badge">${escapeHtml(question.topic)}</span>
+        <span class="meta-badge">${escapeHtml(question.subtopic)}</span>
+        <span class="meta-badge">${escapeHtml(question.difficulty)}</span>
+        <span class="meta-badge">${escapeHtml(question.questionType)}</span>
+        <span class="meta-badge">${question.maximumMark} mark${question.maximumMark === 1 ? "" : "s"}</span>
+        <span class="meta-badge">${escapeHtml(question.status)}</span>
+        <span class="meta-badge">Used ${question.usageCount}</span>
+      </div>
+      <div class="session-badges">
+        <button type="button">Preview</button>
+        <button type="button">Duplicate</button>
+        <button type="button">Add to Test</button>
+        <button type="button">View Results</button>
+      </div>
+    </article>`).join("");
+}
+
+function renderTestBuilder() {
+  const template = templateById(selectedTestTemplateId) || centreState.testTemplates[0];
+  const summary = templateSummary(centreState, template.id);
+  const validation = validateTestTemplate(centreState, template.id);
+  document.querySelector("#testBuilderPanel").innerHTML = `
+    <article class="builder-card">
+      <h3>${escapeHtml(template.name)}</h3>
+      <p>${escapeHtml(template.description)}</p>
+      <div class="boundary-summary">
+        <div><span>Total questions</span><strong>${summary.questionCount}</strong></div>
+        <div><span>Total marks</span><strong>${summary.maximumMark}</strong></div>
+        <div><span>Time limit</span><strong>${template.timeLimitMinutes} min</strong></div>
+      </div>
+      <p class="boundary-target">${escapeHtml(summary.topicCount)} topics covered. Status: ${escapeHtml(template.status)}.</p>
+    </article>
+    <article class="builder-card">
+      <h3>Blueprint summary</h3>
+      <div class="table-wrap"><table class="difficulty-table">
+        <thead><tr><th>Difficulty</th><th>Marks</th></tr></thead>
+        <tbody>${DIFFICULTIES.map((difficulty) => `<tr><td>${difficulty}</td><td>${summary.difficultyMarks[difficulty] || 0}</td></tr>`).join("")}</tbody>
+      </table></div>
+    </article>
+    <article class="builder-card">
+      <h3>Validation</h3>
+      ${validation.critical.length ? `<p><strong>Cannot publish:</strong> ${escapeHtml(validation.critical.join("; "))}</p>` : "<p>No critical errors. This test can be published.</p>"}
+      ${validation.warnings.length ? `<p><strong>Warnings:</strong> ${escapeHtml(validation.warnings.join("; "))}</p>` : "<p>No warnings.</p>"}
+      <button type="button">Preview test</button>
+    </article>`;
+}
+
+function renderSessionsModule() {
+  document.querySelector("#allSessionsTable").innerHTML = sessionsTable(centreState.testSessions);
+}
+
+function renderReportsModule() {
+  document.querySelector("#reportSnapshotList").innerHTML = centreState.reportSnapshots.map((snapshot) => {
+    const student = studentById(snapshot.studentId);
+    return `<button type="button" class="selection-item" data-report-id="${snapshot.id}">
+      <strong>${escapeHtml(student.studentName)} — ${escapeHtml(snapshot.subjectName)}</strong>
+      <p>${escapeHtml(snapshot.status)} · ${formatDate(snapshot.createdAt)} · ${escapeHtml(snapshot.testSessionId || "Longitudinal report")}</p>
+      <p>${escapeHtml(snapshot.generatedNarrative.split("\n").find(Boolean) || "Student report snapshot")}</p>
+    </button>`;
+  }).join("") || "<p>No report snapshots yet.</p>";
+}
+
+function sessionsTable(sessions) {
+  return `
+    <thead><tr><th>Student</th><th>Test</th><th>Date</th><th>Score</th><th>Status</th><th>Report</th></tr></thead>
+    <tbody>${sessions.map((session) => {
+      const student = studentById(session.studentId);
+      const score = session.maximumMark ? `${round1(session.rawMark || 0)}/${session.maximumMark} (${Math.round(session.percentage || 0)}%)` : "—";
+      return `<tr><td><strong>${escapeHtml(student.studentName)}</strong><br><span class="muted-line">${escapeHtml(student.school)}</span></td><td>${escapeHtml(session.testName)}</td><td>${escapeHtml(shortDate(session.submittedAt || session.startedAt || session.createdAt))}</td><td>${score}</td><td><span class="status-pill ${sessionStatusClass(session.status)}">${escapeHtml(session.status)}</span></td><td>${sessionActions(session)}</td></tr>`;
+    }).join("")}</tbody>`;
+}
+
+function sessionActions(session) {
+  if (session.status === "In progress") return `<button type="button" data-session-action="resume" data-session-id="${session.id}">Resume</button>`;
+  if (session.status === "Needs marking") return `<button type="button" data-session-action="mark" data-session-id="${session.id}">Review Written Answers</button>`;
+  if (session.status === "Marked") return `<button type="button" data-session-action="report" data-session-id="${session.id}">Generate Report</button>`;
+  if (session.status === "Report generated") return `<button type="button" data-session-action="view-report" data-session-id="${session.id}">Open Report</button>`;
+  return "—";
+}
+
+function handleSessionAction(event) {
+  const button = event.target.closest("[data-session-action]");
+  if (!button) return;
+  const sessionId = button.dataset.sessionId;
+  const action = button.dataset.sessionAction;
+  if (action === "resume") openTestMode(sessionId);
+  if (action === "cancel") cancelSession(sessionId);
+  if (action === "mark") {
+    activeSessionId = sessionId;
+    showCentreModule("marking");
+    renderMarkingModule();
+  }
+  if (action === "report") generateReportForSession(sessionId);
+  if (action === "view-report") {
+    const snapshot = centreState.reportSnapshots.find((item) => item.testSessionId === sessionId);
+    if (snapshot) renderEvidenceSnapshot(snapshot.evidenceJson, snapshot.editedNarrative || snapshot.generatedNarrative);
+  }
+}
+
+function createTestSession(state, studentId, testTemplateId, now) {
+  const template = state.testTemplates.find((item) => item.id === testTemplateId);
+  const startedAt = now.toISOString();
+  const session = {
+    id: makeId("SESSION"),
+    studentId,
+    testTemplateId,
+    testName: template.name,
+    subjectName: template.subjectName,
+    status: "In progress",
+    startedAt,
+    submittedAt: "",
+    markedAt: "",
+    reportGeneratedAt: "",
+    timeLimitMinutes: template.timeLimitMinutes,
+    serverDeadline: new Date(now.getTime() + template.timeLimitMinutes * 60000).toISOString(),
+    timeUsedSeconds: 0,
+    createdAt: startedAt,
+    updatedAt: startedAt
+  };
+  state.testSessions.unshift(session);
+  const questionsForTemplate = getTemplateQuestions(state, testTemplateId);
+  for (const question of questionsForTemplate) {
+    state.studentResponses = upsertStudentResponse(state.studentResponses, {
+      id: makeId("RESP"),
+      testSessionId: session.id,
+      studentId,
+      questionId: question.id,
+      questionVersion: question.version,
+      answer: emptyAnswerForQuestion(question),
+      firstViewedAt: "",
+      lastSavedAt: "",
+      timeSpentSeconds: 0,
+      answerChangeCount: 0,
+      flagged: false,
+      markAwarded: null,
+      maximumMark: question.maximumMark,
+      markingMethod: "",
+      markingConfidence: 0,
+      errorCodes: [],
+      feedback: "",
+      internalNote: "",
+      markedAt: "",
+      createdAt: startedAt,
+      updatedAt: startedAt
+    });
+  }
+  return session;
+}
+
+function openTestMode(sessionId) {
+  const session = sessionById(sessionId);
+  if (!session || session.status !== "In progress") return;
+  activeSessionId = sessionId;
+  activeQuestionIndex = 0;
+  activeTestPayload = buildTestModePayload(centreState, sessionId);
+  document.querySelector("#completionScreen").hidden = true;
+  document.querySelector(".test-mode-shell").hidden = false;
+  document.querySelector("#testMode").hidden = false;
+  renderTestMode();
+  startTestTimer();
+}
+
+function closeTestMode(moduleName = "dashboard") {
+  document.querySelector("#testMode").hidden = true;
+  document.querySelector(".test-mode-shell").hidden = false;
+  document.querySelector("#completionScreen").hidden = true;
+  clearInterval(testTimerInterval);
+  activeTestPayload = null;
+  renderCentreSystem();
+  showCentreModule(moduleName);
+}
+
+function renderTestMode() {
+  if (!activeTestPayload) return;
+  const session = sessionById(activeSessionId);
+  const student = studentById(session.studentId);
+  document.querySelector("#testModeStudent").textContent = student.studentName.split(" ")[0];
+  document.querySelector("#testModeTitle").textContent = activeTestPayload.testName;
+  renderQuestionNavigation();
+  renderCurrentQuestion();
+  updateTestTimer();
+}
+
+function renderQuestionNavigation() {
+  const responsesForSession = responsesBySession(activeSessionId);
+  document.querySelector("#testQuestionNav").innerHTML = activeTestPayload.questions.map((question, index) => {
+    const response = responsesForSession.find((item) => item.questionId === question.id);
+    return `<button type="button" class="${index === activeQuestionIndex ? "active" : ""} ${isAnswered(response?.answer) ? "answered" : ""} ${response?.flagged ? "flagged" : ""}" data-question-index="${index}">${index + 1}</button>`;
+  }).join("");
+  document.querySelector("#testQuestionNav").querySelectorAll("button").forEach((button) => {
+    button.addEventListener("click", () => {
+      saveActiveResponseNow();
+      activeQuestionIndex = Number(button.dataset.questionIndex);
+      renderTestMode();
+    });
+  });
+  const answered = responsesForSession.filter((response) => isAnswered(response.answer)).length;
+  document.querySelector("#testProgressBar").style.width = `${(answered / activeTestPayload.questions.length) * 100}%`;
+}
+
+function renderCurrentQuestion() {
+  const question = activeTestPayload.questions[activeQuestionIndex];
+  const response = responseFor(activeSessionId, question.id);
+  document.querySelector("#testQuestionContent").innerHTML = `
+    <span class="step-label">${escapeHtml(question.sectionTitle)} · Question ${activeQuestionIndex + 1} of ${activeTestPayload.questions.length}</span>
+    <h2>${escapeHtml(question.title)}</h2>
+    <p>${escapeHtml(question.questionContent.prompt)}</p>
+    <p class="muted-line">${question.maximumMark} mark${question.maximumMark === 1 ? "" : "s"}</p>`;
+  document.querySelector("#testAnswerArea").innerHTML = answerInputMarkup(question, response);
+  bindAnswerInputs(question);
+}
+
+function answerInputMarkup(question, response) {
+  if (question.questionType === "MCQ") {
+    return question.options.map((option) => `<button type="button" class="answer-card ${response.answer === option.label ? "selected" : ""}" data-answer="${escapeHtml(option.label)}"><strong>${escapeHtml(option.label)}</strong> ${escapeHtml(option.content)}</button>`).join("");
+  }
+  if (question.questionType === "TrueFalse") {
+    return `<div class="tf-grid"><button type="button" class="tf-button answer-card ${normaliseTrueFalse(response.answer) === true ? "selected" : ""}" data-answer="True">True</button><button type="button" class="tf-button answer-card ${normaliseTrueFalse(response.answer) === false ? "selected" : ""}" data-answer="False">False</button></div>`;
+  }
+  if (question.questionType === "Numerical" || question.questionType === "StructuredCalculation") {
+    const answer = typeof response.answer === "object" && response.answer ? response.answer : {};
+    return `<label>Working<textarea data-answer-field="working" rows="5">${escapeHtml(answer.working || "")}</textarea></label><label>Final answer<input data-answer-field="finalAnswer" value="${escapeHtml(answer.finalAnswer || "")}" /></label><label>Unit<input data-answer-field="unit" value="${escapeHtml(answer.unit || "")}" /></label>`;
+  }
+  return `<label>Answer<textarea data-answer-field="text" rows="8">${escapeHtml(typeof response.answer === "string" ? response.answer : "")}</textarea></label>`;
+}
+
+function bindAnswerInputs(question) {
+  document.querySelectorAll("#testAnswerArea [data-answer]").forEach((button) => {
+    button.addEventListener("click", () => updateActiveAnswer(button.dataset.answer));
+  });
+  document.querySelectorAll("#testAnswerArea [data-answer-field]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const current = responseFor(activeSessionId, question.id).answer;
+      const next = typeof current === "object" && current ? { ...current } : {};
+      next[input.dataset.answerField] = input.value;
+      updateActiveAnswer(question.questionType === "ShortAnswer" ? next.text || "" : next);
+    });
+  });
+}
+
+function updateActiveAnswer(answer) {
+  const question = activeTestPayload.questions[activeQuestionIndex];
+  const response = responseFor(activeSessionId, question.id);
+  response.answer = answer;
+  response.answerChangeCount += 1;
+  response.lastSavedAt = new Date().toISOString();
+  response.updatedAt = response.lastSavedAt;
+  document.querySelector("#autosaveStatus").textContent = "Saving / 儲存中";
+  persistCentreState();
+  clearTimeout(responseSaveTimers.get(response.id));
+  responseSaveTimers.set(response.id, setTimeout(() => {
+    persistCentreState();
+    document.querySelector("#autosaveStatus").textContent = "Saved / 已儲存";
+    renderQuestionNavigation();
+    renderCurrentQuestion();
+  }, 800));
+}
+
+function saveActiveResponseNow() {
+  if (!activeTestPayload) return;
+  persistCentreState();
+  document.querySelector("#autosaveStatus").textContent = "Saved / 已儲存";
+}
+
+function moveTestQuestion(delta) {
+  saveActiveResponseNow();
+  activeQuestionIndex = clamp(activeQuestionIndex + delta, 0, activeTestPayload.questions.length - 1);
+  renderTestMode();
+}
+
+function toggleCurrentQuestionFlag() {
+  const question = activeTestPayload.questions[activeQuestionIndex];
+  const response = responseFor(activeSessionId, question.id);
+  response.flagged = !response.flagged;
+  response.updatedAt = new Date().toISOString();
+  persistCentreState();
+  renderTestMode();
+}
+
+function startTestTimer() {
+  clearInterval(testTimerInterval);
+  testTimerInterval = setInterval(updateTestTimer, 1000);
+}
+
+function updateTestTimer() {
+  const session = sessionById(activeSessionId);
+  if (!session) return;
+  const remaining = recoverTimeRemaining(session, new Date());
+  document.querySelector("#testTimer").textContent = formatRemaining(remaining);
+  if (remaining <= 0 && session.status === "In progress") submitActiveTest(true);
+}
+
+function submitActiveTest(autoSubmitted) {
+  const session = sessionById(activeSessionId);
+  if (!session || session.status !== "In progress") return;
+  saveActiveResponseNow();
+  const responsesForSession = responsesBySession(session.id);
+  const unanswered = responsesForSession.filter((response) => !isAnswered(response.answer)).length;
+  const flagged = responsesForSession.filter((response) => response.flagged).length;
+  if (!autoSubmitted && !window.confirm(`Answered: ${responsesForSession.length - unanswered}\nUnanswered: ${unanswered}\nFlagged: ${flagged}\n\nSubmit this test?`)) return;
+  markSubmittedSession(centreState, session.id, new Date(), autoSubmitted);
+  persistCentreState();
+  clearInterval(testTimerInterval);
+  document.querySelector(".test-mode-shell").hidden = true;
+  document.querySelector("#completionScreen").hidden = false;
+  renderCentreSystem();
+}
+
+function cancelSession(sessionId) {
+  if (!window.confirm("Cancel this session? Responses will be retained for audit but the test will be locked.")) return;
+  const session = sessionById(sessionId);
+  session.status = "Cancelled";
+  session.updatedAt = new Date().toISOString();
+  persistCentreState();
+  renderCentreSystem();
+}
+
+function markSubmittedSession(state, sessionId, now, autoSubmitted = false) {
+  const session = state.testSessions.find((item) => item.id === sessionId);
+  const submittedAt = now.toISOString();
+  const questionsForSession = getSessionQuestions(state, sessionId);
+  const responsesForSession = state.studentResponses.filter((item) => item.testSessionId === sessionId);
+  for (const response of responsesForSession) {
+    const question = questionsForSession.find((item) => item.id === response.questionId);
+    if (!isAnswered(response.answer)) {
+      response.answer = emptyAnswerForQuestion(question);
+      response.errorCodes = ["No attempt"];
+    }
+    if (questionRequiresStaffReview(question)) {
+      const suggestion = suggestWrittenResponse(question, response.answer);
+      response.suggestedMark = suggestion.suggestedMark;
+      response.markingSuggestion = suggestion;
+      response.markingMethod = "Suggested";
+      response.markingConfidence = suggestion.confidence;
+      response.markAwarded = null;
+    } else {
+      const marked = markObjectiveResponse(question, response.answer);
+      response.markAwarded = marked.markAwarded;
+      response.errorCodes = marked.errorCodes;
+      response.markingMethod = "Automatic";
+      response.markingConfidence = marked.confidence;
+      response.markedAt = submittedAt;
+    }
+    response.lastSavedAt = submittedAt;
+    response.updatedAt = submittedAt;
+  }
+  session.submittedAt = submittedAt;
+  session.timeUsedSeconds = Math.max(0, Math.round((new Date(submittedAt) - new Date(session.startedAt)) / 1000));
+  session.status = responsesForSession.some((response) => response.markAwarded === null || response.markAwarded === undefined) ? "Needs marking" : "Marked";
+  if (autoSubmitted) session.internalNote = "Auto-submitted when timer expired.";
+  updateSessionScore(state, sessionId);
+}
+
+function recoverTimeRemaining(session, now) {
+  return Math.max(0, Math.round((new Date(session.serverDeadline) - now) / 1000));
+}
+
+function renderMarkingModule() {
+  const session = activeSessionId ? sessionById(activeSessionId) : centreState.testSessions.find((item) => item.status === "Needs marking") || centreState.testSessions.find((item) => item.status === "Marked") || centreState.testSessions[0];
+  activeSessionId = session?.id ?? null;
+  const panel = document.querySelector("#markingPanel");
+  if (!session) {
+    panel.innerHTML = "<p>No test sessions available.</p>";
+    return;
+  }
+  const student = studentById(session.studentId);
+  const writtenResponses = responsesBySession(session.id).filter((response) => questionRequiresStaffReview(questionById(response.questionId)));
+  const reviewed = writtenResponses.filter((response) => response.markingMethod === "Staff reviewed" || response.markingMethod === "Manual override").length;
+  const unreviewed = writtenResponses.length - reviewed;
+  panel.innerHTML = `
+    <article class="marking-card">
+      <h3>${escapeHtml(student.studentName)} — ${escapeHtml(session.testName)}</h3>
+      <p>Submitted: ${escapeHtml(session.submittedAt ? formatDate(session.submittedAt) : "Not submitted")} · Objective marking: ${objectiveResponsesComplete(session.id) ? "Complete" : "Pending"} · Written marking: ${reviewed}/${writtenResponses.length} reviewed</p>
+      <p>Provisional score: ${round1(session.rawMark || 0)}/${session.maximumMark || templateSummary(centreState, session.testTemplateId).maximumMark}</p>
+      <div class="session-badges">
+        <button type="button" data-marking-action="finish" data-session-id="${session.id}">Finish Marking</button>
+        <button type="button" data-marking-action="generate-report" data-session-id="${session.id}" ${unreviewed ? "disabled" : ""}>Generate Report / 生成報告</button>
+      </div>
+    </article>
+    ${writtenResponses.map((response, index) => markingCard(session, response, index, writtenResponses.length)).join("") || "<p>No written responses require staff review.</p>"}`;
+}
+
+function markingCard(session, response, index, total) {
+  const question = questionById(response.questionId);
+  const suggestion = response.markingSuggestion || suggestWrittenResponse(question, response.answer);
+  return `<article class="marking-card" data-response-id="${response.id}">
+    <span class="step-label">${index + 1} of ${total} written responses</span>
+    <h3>${escapeHtml(question.title)}</h3>
+    <p><strong>Question:</strong> ${escapeHtml(question.questionContent.prompt)}</p>
+    <p><strong>Mark scheme:</strong> ${escapeHtml(question.markingPoints.map((point) => `${point.description} (${point.markValue})`).join("; "))}</p>
+    <p><strong>Student answer:</strong> ${escapeHtml(displayAnswer(response.answer) || "No attempt")}</p>
+    <p><strong>Suggested mark:</strong> ${suggestion.suggestedMark}/${suggestion.maximumMark} · Confidence ${(suggestion.confidence * 100).toFixed(0)}%</p>
+    <label>Final mark<input type="number" min="0" max="${question.maximumMark}" step="0.5" data-mark-input="${response.id}" value="${response.markAwarded ?? suggestion.suggestedMark ?? 0}" /></label>
+    <label>Feedback<textarea rows="3" data-feedback-input="${response.id}">${escapeHtml(response.feedback || "")}</textarea></label>
+    <div class="session-badges">
+      <button type="button" data-marking-action="approve" data-response-id="${response.id}">Approve Suggestion</button>
+      <button type="button" data-marking-action="save" data-response-id="${response.id}">Save and Next</button>
+    </div>
+  </article>`;
+}
+
+function handleMarkInput(event) {
+  const markInput = event.target.closest("[data-mark-input]");
+  const feedbackInput = event.target.closest("[data-feedback-input]");
+  if (!markInput && !feedbackInput) return;
+  const responseId = markInput?.dataset.markInput || feedbackInput?.dataset.feedbackInput;
+  const response = centreState.studentResponses.find((item) => item.id === responseId);
+  if (!response) return;
+  if (markInput) response.pendingMark = clamp(number(markInput.value) ?? 0, 0, response.maximumMark);
+  if (feedbackInput) response.feedback = feedbackInput.value;
+}
+
+function handleMarkingAction(event) {
+  const button = event.target.closest("[data-marking-action]");
+  if (!button) return;
+  const action = button.dataset.markingAction;
+  if (action === "approve") approveWrittenResponse(button.dataset.responseId);
+  if (action === "save") saveWrittenResponse(button.dataset.responseId);
+  if (action === "finish") finishMarking(button.dataset.sessionId);
+  if (action === "generate-report") generateReportForSession(button.dataset.sessionId);
+}
+
+function approveWrittenResponse(responseId) {
+  const response = centreState.studentResponses.find((item) => item.id === responseId);
+  const question = questionById(response.questionId);
+  const suggestion = response.markingSuggestion || suggestWrittenResponse(question, response.answer);
+  response.markAwarded = suggestion.suggestedMark;
+  response.errorCodes = suggestion.suggestedErrorCodes;
+  response.markingMethod = "Staff reviewed";
+  response.markingConfidence = suggestion.confidence;
+  response.markedAt = new Date().toISOString();
+  response.updatedAt = response.markedAt;
+  finishMarkingIfComplete(response.testSessionId);
+  persistCentreState();
+  renderMarkingModule();
+}
+
+function saveWrittenResponse(responseId) {
+  const response = centreState.studentResponses.find((item) => item.id === responseId);
+  response.markAwarded = clamp(response.pendingMark ?? response.markAwarded ?? 0, 0, response.maximumMark);
+  response.markingMethod = "Staff reviewed";
+  response.markingConfidence = 1;
+  response.markedAt = new Date().toISOString();
+  response.updatedAt = response.markedAt;
+  if (!response.errorCodes?.length && response.markAwarded < response.maximumMark) response.errorCodes = ["Incomplete explanation"];
+  finishMarkingIfComplete(response.testSessionId);
+  persistCentreState();
+  renderMarkingModule();
+}
+
+function finishMarking(sessionId) {
+  finishMarkingIfComplete(sessionId, true);
+  persistCentreState();
+  renderCentreSystem();
+}
+
+function finishMarkingIfComplete(sessionId, force = false) {
+  const session = sessionById(sessionId);
+  const missing = responsesBySession(sessionId).filter((response) => response.markAwarded === null || response.markAwarded === undefined);
+  if (missing.length && !force) return;
+  session.status = missing.length ? "Needs marking" : "Marked";
+  session.markedAt = missing.length ? session.markedAt : new Date().toISOString();
+  session.updatedAt = new Date().toISOString();
+  updateSessionScore(centreState, sessionId);
+}
+
+function generateReportForSession(sessionId) {
+  const unmarked = responsesBySession(sessionId).filter((response) => response.markAwarded === null || response.markAwarded === undefined);
+  if (unmarked.length) {
+    alert("Complete written marking before generating the report.");
+    return;
+  }
+  const snapshot = buildReportSnapshotFromState(centreState, sessionId, "Draft");
+  const existingIndex = centreState.reportSnapshots.findIndex((item) => item.testSessionId === sessionId);
+  if (existingIndex >= 0) centreState.reportSnapshots[existingIndex] = snapshot;
+  else centreState.reportSnapshots.unshift(snapshot);
+  const session = sessionById(sessionId);
+  session.status = "Report generated";
+  session.reportGeneratedAt = snapshot.createdAt;
+  session.updatedAt = snapshot.createdAt;
+  persistCentreState();
+  renderCentreSystem();
+  renderEvidenceSnapshot(snapshot.evidenceJson, snapshot.generatedNarrative);
+  showCentreModule("reports");
+}
+
+function buildReportSnapshotFromState(state, sessionId, status = "Draft") {
+  const session = state.testSessions.find((item) => item.id === sessionId);
+  const evidenceObject = buildCentreReportEvidence(state, sessionId);
+  const narrative = generateParentReport(evidenceObject);
+  const now = new Date().toISOString();
+  return {
+    id: makeId("REPORT"),
+    studentId: session.studentId,
+    subjectName: session.subjectName,
+    testSessionId: session.id,
+    reportingPeriodStart: evidenceObject.reportingPeriod.start,
+    reportingPeriodEnd: evidenceObject.reportingPeriod.end,
+    evidenceJson: evidenceObject,
+    generatedNarrative: narrative,
+    editedNarrative: "",
+    status,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function buildCentreReportEvidence(state, sessionId) {
+  const latestSession = state.testSessions.find((item) => item.id === sessionId);
+  const student = state.students.find((item) => item.studentId === latestSession.studentId);
+  const sessions = state.testSessions
+    .filter((session) => session.studentId === latestSession.studentId && session.subjectName === latestSession.subjectName && ["Submitted", "Needs marking", "Marked", "Report generated"].includes(session.status))
+    .sort((a, b) => new Date(a.submittedAt || a.startedAt) - new Date(b.submittedAt || b.startedAt));
+  const inputs = centreSessionsToReportInputs(state, student, sessions);
+  const report = buildStudentReportEvidence(inputs.assessments, inputs.questions, inputs.responses, {
+    studentName: student.studentName,
+    subject: latestSession.subjectName,
+    reportDate: new Date(latestSession.submittedAt || latestSession.startedAt)
+  });
+  report.assessmentHistory = report.overallProgress.assessments;
+  report.latestSession = latestSession;
+  report.dataQuality.reportSource = "Centre test session records";
+  return report;
+}
+
+function centreSessionsToReportInputs(state, student, sessions) {
+  const assessmentsOut = [];
+  const questionsOut = [];
+  const responsesOut = [];
+  for (const session of sessions) {
+    const template = state.testTemplates.find((item) => item.id === session.testTemplateId);
+    const sessionQuestions = getSessionQuestions(state, session.id);
+    assessmentsOut.push({
+      assessmentId: session.id,
+      studentId: student.studentId,
+      studentName: student.studentName,
+      qualification: template.qualification,
+      examBoard: template.examBoard,
+      syllabusCode: template.syllabusCode,
+      subject: session.subjectName,
+      assessmentName: session.testName,
+      assessmentDate: toIsoDate(session.submittedAt || session.startedAt),
+      assessmentType: template.testType,
+      maximumMark: templateSummary(state, template.id).maximumMark,
+      durationMinutes: template.timeLimitMinutes
+    });
+    for (const question of sessionQuestions) {
+      questionsOut.push({
+        assessmentId: session.id,
+        questionId: question.id,
+        section: question.section,
+        questionNumber: question.id,
+        maximumMark: question.maximumMark,
+        correctAnswer: question.correctAnswer,
+        topic: question.topic,
+        subtopic: question.subtopic,
+        difficulty: question.difficulty,
+        questionType: reportQuestionType(question.questionType),
+        assessmentObjective: question.assessmentObjective,
+        answerMode: question.questionType === "Numerical" ? "numeric" : questionRequiresStaffReview(question) ? "tutor-marked" : "exact",
+        numericalTolerance: question.numericalTolerance,
+        requiredUnit: question.requiredUnit,
+        coreOrSupplement: question.coreOrSupplement
+      });
+    }
+    for (const response of state.studentResponses.filter((item) => item.testSessionId === session.id)) {
+      responsesOut.push({
+        assessmentId: session.id,
+        studentId: student.studentId,
+        questionId: response.questionId,
+        studentAnswer: displayAnswer(response.answer),
+        markAwarded: response.markAwarded ?? 0,
+        maximumMark: response.maximumMark,
+        markingMethod: response.markingMethod,
+        errorCode: response.errorCodes?.[0] || "",
+        tutorFeedback: response.feedback
+      });
+    }
+  }
+  return { assessments: assessmentsOut, questions: questionsOut, responses: responsesOut };
+}
+
+function renderEvidenceSnapshot(report, narrative) {
+  evidence = report;
+  document.querySelector("#pageTitle").textContent = `${report.student.name} - ${report.subject.name} Report`;
+  renderSummary(report);
+  renderProgressChart(report);
+  renderRadar(report.topicProfile, "Topic Mastery");
+  renderPrintRadars(report);
+  renderGradeEvidence(report);
+  renderTopicMap(report);
+  renderHeatmap(report);
+  renderDifficultyPanel(report);
+  renderErrorPatterns(report);
+  renderDataQuality(report);
+  elements.reportText.value = narrative || generateParentReport(report);
+}
+
+function markObjectiveResponse(question, answer) {
+  if (question.questionType === "MCQ") return markMcq(question, answer);
+  if (question.questionType === "TrueFalse") return markTrueFalse(question, answer);
+  if (question.questionType === "Numerical" || question.questionType === "StructuredCalculation") return markNumerical(question, answer);
+  return { markAwarded: null, confidence: 0, errorCodes: [], requiresStaffReview: true };
+}
+
+function markMcq(question, studentAnswer) {
+  const correct = question.options.find((option) => option.isCorrect);
+  const selected = question.options.find((option) => normaliseAnswer(option.label) === normaliseAnswer(studentAnswer));
+  if (!studentAnswer) return { markAwarded: 0, confidence: 1, errorCodes: ["No attempt"], requiresStaffReview: false };
+  return {
+    markAwarded: selected && correct && normaliseAnswer(selected.label) === normaliseAnswer(correct.label) ? question.maximumMark : 0,
+    confidence: 1,
+    errorCodes: selected?.isCorrect ? [] : [selected?.errorCode || "Misconception"],
+    requiresStaffReview: false
+  };
+}
+
+function markTrueFalse(question, studentAnswer) {
+  const correct = normaliseTrueFalse(question.correctAnswer);
+  const submitted = normaliseTrueFalse(studentAnswer);
+  if (submitted === null) return { markAwarded: 0, confidence: 1, errorCodes: ["No attempt"], requiresStaffReview: false };
+  return {
+    markAwarded: submitted === correct ? question.maximumMark : 0,
+    confidence: 1,
+    errorCodes: submitted === correct ? [] : ["Question interpretation"],
+    requiresStaffReview: false
+  };
+}
+
+function markNumerical(question, answer) {
+  const finalAnswer = typeof answer === "object" && answer ? `${answer.finalAnswer ?? ""} ${answer.unit ?? ""}` : answer;
+  if (!text(finalAnswer)) return { markAwarded: 0, confidence: 1, errorCodes: ["No attempt"], requiresStaffReview: false };
+  const valueCorrect = markNumericAnswer(question, finalAnswer);
+  const parsed = parseNumberAndUnit(finalAnswer);
+  const correct = parseNumberAndUnit(question.correctAnswer);
+  const valueOnlyCorrect = parsed.value !== null && correct.value !== null && Math.abs(parsed.value - correct.value) <= (question.numericalTolerance ?? 0);
+  if (valueCorrect) return { markAwarded: question.maximumMark, confidence: 1, errorCodes: [], requiresStaffReview: false };
+  if (valueOnlyCorrect) return { markAwarded: Math.max(0, question.maximumMark - 1), confidence: 0.95, errorCodes: ["Unit error"], requiresStaffReview: false };
+  return { markAwarded: 0, confidence: 0.95, errorCodes: ["Incorrect calculation method"], requiresStaffReview: false };
+}
+
+function suggestWrittenResponse(question, answer) {
+  const answerText = displayAnswer(answer).toLowerCase();
+  const markingPoints = question.markingPoints.map((point) => {
+    const matched = point.acceptedConcepts?.some((concept) => answerText.includes(String(concept).toLowerCase()));
+    return {
+      id: point.id,
+      status: matched ? "Met" : answerText ? "Uncertain" : "Not met",
+      evidenceText: matched ? point.acceptedConcepts.find((concept) => answerText.includes(String(concept).toLowerCase())) : ""
+    };
+  });
+  const suggestedMark = clamp(sum(markingPoints.map((point, index) => point.status === "Met" ? question.markingPoints[index].markValue : 0)), 0, question.maximumMark);
+  const uncertain = markingPoints.some((point) => point.status === "Uncertain");
+  const confidence = !answerText ? 1 : uncertain ? 0.62 : 0.9;
+  return {
+    suggestedMark,
+    maximumMark: question.maximumMark,
+    confidence,
+    markingPoints,
+    suggestedErrorCodes: !answerText ? ["No attempt"] : suggestedMark < question.maximumMark ? ["Incomplete explanation"] : [],
+    requiresStaffReview: confidence < 0.85 || uncertain
+  };
+}
+
+function normaliseTrueFalse(value) {
+  const source = normaliseAnswer(value);
+  if (["true", "t", "yes", "1"].includes(source)) return true;
+  if (["false", "f", "no", "0"].includes(source)) return false;
+  return null;
+}
+
+function upsertStudentResponse(existingResponses, response) {
+  const index = existingResponses.findIndex((item) => item.testSessionId === response.testSessionId && item.questionId === response.questionId);
+  if (index >= 0) {
+    const next = [...existingResponses];
+    next[index] = { ...next[index], ...response, id: next[index].id };
+    return next;
+  }
+  return [...existingResponses, response];
+}
+
+function buildTestModePayload(state, sessionId) {
+  const session = state.testSessions.find((item) => item.id === sessionId);
+  const student = state.students.find((item) => item.studentId === session.studentId);
+  const template = state.testTemplates.find((item) => item.id === session.testTemplateId);
+  const sections = state.testSections.filter((item) => item.testTemplateId === template.id).sort((a, b) => a.order - b.order);
+  const questionsForTest = sections.flatMap((section) => section.questionRefs.sort((a, b) => a.order - b.order).map((ref) => {
+    const question = state.questions.find((item) => item.id === ref.questionId && item.version === ref.questionVersion);
+    return {
+      id: question.id,
+      sectionTitle: section.title,
+      section: question.section,
+      title: question.title,
+      questionContent: question.questionContent,
+      questionType: question.questionType,
+      maximumMark: ref.markOverride ?? question.maximumMark,
+      options: question.options?.map((option) => ({ id: option.id, label: option.label, content: option.content })) || []
+    };
+  }));
+  return {
+    sessionId,
+    student: { studentId: student.studentId, displayName: student.studentName.split(" ")[0] },
+    testName: template.name,
+    instructions: template.instructions,
+    serverDeadline: session.serverDeadline,
+    questions: questionsForTest
+  };
+}
+
+function getTemplateQuestions(state, testTemplateId) {
+  return state.testSections
+    .filter((section) => section.testTemplateId === testTemplateId)
+    .sort((a, b) => a.order - b.order)
+    .flatMap((section) => section.questionRefs.sort((a, b) => a.order - b.order).map((ref) => state.questions.find((question) => question.id === ref.questionId && question.version === ref.questionVersion)).filter(Boolean));
+}
+
+function getSessionQuestions(state, sessionId) {
+  const session = state.testSessions.find((item) => item.id === sessionId);
+  return session ? getTemplateQuestions(state, session.testTemplateId) : [];
+}
+
+function templateSummary(state, templateId) {
+  const questionsForTemplate = getTemplateQuestions(state, templateId);
+  const difficultyMarks = Object.fromEntries(DIFFICULTIES.map((difficulty) => [difficulty, sum(questionsForTemplate.filter((question) => question.difficulty === difficulty).map((question) => question.maximumMark))]));
+  const questionTypeMarks = Object.fromEntries([...new Set(questionsForTemplate.map((question) => question.questionType))].map((type) => [type, sum(questionsForTemplate.filter((question) => question.questionType === type).map((question) => question.maximumMark))]));
+  return {
+    questionCount: questionsForTemplate.length,
+    maximumMark: sum(questionsForTemplate.map((question) => question.maximumMark)),
+    topicCount: unique(questionsForTemplate.map((question) => question.topic)).length,
+    difficultyMarks,
+    questionTypeMarks
+  };
+}
+
+function validateTestTemplate(state, templateId) {
+  const sections = state.testSections.filter((section) => section.testTemplateId === templateId);
+  const questionsForTemplate = getTemplateQuestions(state, templateId);
+  const critical = [];
+  const warnings = [];
+  if (!sections.length) critical.push("No sections have been added");
+  if (sections.some((section) => !section.questionRefs.length)) critical.push("One or more sections are empty");
+  if (questionsForTemplate.some((question) => !question.topic)) warnings.push("Some questions are missing topic");
+  if (questionsForTemplate.some((question) => !question.difficulty)) critical.push("Some questions are missing difficulty");
+  if (questionsForTemplate.some((question) => question.maximumMark <= 0)) critical.push("Some questions have invalid maximum marks");
+  if (new Set(questionsForTemplate.map((question) => question.id)).size !== questionsForTemplate.length) critical.push("Duplicate questions are present");
+  if (questionsForTemplate.some((question) => !questionRequiresStaffReview(question) && !question.correctAnswer && !question.options?.some((option) => option.isCorrect))) critical.push("Objective questions need a correct answer");
+  return { critical, warnings };
+}
+
+function updateSessionScore(state, sessionId) {
+  const session = state.testSessions.find((item) => item.id === sessionId);
+  const responsesForSession = state.studentResponses.filter((item) => item.testSessionId === sessionId);
+  const markedResponses = responsesForSession.filter((item) => item.markAwarded !== null && item.markAwarded !== undefined);
+  const maximumMark = sum(responsesForSession.map((item) => item.maximumMark));
+  const rawMark = sum(markedResponses.map((item) => item.markAwarded));
+  const answered = responsesForSession.filter((item) => isAnswered(item.answer)).length;
+  session.rawMark = round1(rawMark);
+  session.maximumMark = maximumMark;
+  session.percentage = maximumMark ? (rawMark / maximumMark) * 100 : 0;
+  session.answeredQuestions = answered;
+  session.totalQuestions = responsesForSession.length;
+  session.completionRate = responsesForSession.length ? (answered / responsesForSession.length) * 100 : 0;
+  session.updatedAt = new Date().toISOString();
+}
+
+function answerFromSample(response, question) {
+  if (question.questionType === "ShortAnswer") return response.studentAnswer === "Tutor marked response" ? `${question.topic} ${question.subtopic} because particles and ions explain the observation.` : response.studentAnswer;
+  return response.studentAnswer;
+}
+
+function emptyAnswerForQuestion(question) {
+  return question.questionType === "Numerical" || question.questionType === "StructuredCalculation" ? { working: "", finalAnswer: "", unit: "" } : "";
+}
+
+function isAnswered(answer) {
+  if (answer === null || answer === undefined) return false;
+  if (typeof answer === "object") return Object.values(answer).some((value) => text(value));
+  return Boolean(text(answer));
+}
+
+function questionRequiresStaffReview(question) {
+  return ["ShortAnswer", "LongApplication", "PracticalPlanning", "ChemicalEquation", "DataInterpretation", "GraphInterpretation"].includes(question.questionType);
+}
+
+function objectiveResponsesComplete(sessionId) {
+  return responsesBySession(sessionId)
+    .filter((response) => !questionRequiresStaffReview(questionById(response.questionId)))
+    .every((response) => response.markingMethod === "Automatic");
+}
+
+function reportQuestionType(type) {
+  return {
+    MCQ: "MCQ",
+    TrueFalse: "True / False",
+    ShortAnswer: "Short explanation",
+    StructuredCalculation: "Structured calculation",
+    Numerical: "Structured calculation",
+    ChemicalEquation: "Structured calculation",
+    DataInterpretation: "Data interpretation",
+    GraphInterpretation: "Graph interpretation",
+    PracticalPlanning: "Experimental planning",
+    LongApplication: "Long application"
+  }[type] || "Problem solving";
+}
+
+function displayAnswer(answer) {
+  if (answer === null || answer === undefined) return "";
+  if (typeof answer === "object") return Object.entries(answer).filter(([, value]) => text(value)).map(([key, value]) => `${key}: ${value}`).join("; ");
+  return String(answer);
+}
+
+function normaliseCentreErrorCode(value) {
+  return {
+    "Calculation method": "Incorrect calculation method",
+    "Careless error": "Other"
+  }[value] || value || "";
+}
+
+function responsesBySession(sessionId) {
+  return centreState.studentResponses.filter((item) => item.testSessionId === sessionId);
+}
+
+function responseFor(sessionId, questionId) {
+  return centreState.studentResponses.find((item) => item.testSessionId === sessionId && item.questionId === questionId);
+}
+
+function studentById(studentId) {
+  return centreState.students.find((item) => item.studentId === studentId) || { studentName: "Unknown student", school: "" };
+}
+
+function templateById(templateId) {
+  return centreState.testTemplates.find((item) => item.id === templateId);
+}
+
+function sessionById(sessionId) {
+  return centreState.testSessions.find((item) => item.id === sessionId);
+}
+
+function questionById(questionId) {
+  return centreState.questions.find((item) => item.id === questionId);
+}
+
+function getUnfinishedSession(state) {
+  return state.testSessions.find((session) => session.status === "In progress" && recoverTimeRemaining(session, new Date()) > 0);
+}
+
+function lastUsedLabel(templateId) {
+  const session = centreState.testSessions.find((item) => item.testTemplateId === templateId && item.startedAt);
+  return session ? shortDate(session.startedAt) : "Never";
+}
+
+function sessionStatusClass(status) {
+  if (status === "Report generated" || status === "Marked") return "status-strong";
+  if (status === "Needs marking" || status === "Submitted") return "status-watch";
+  if (status === "Cancelled") return "status-priority";
+  return "status-good";
+}
+
+function formatRemaining(seconds) {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+function makeId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 async function handleDataFile(event, target) {
@@ -208,7 +1400,7 @@ function render() {
 
   renderSummary(evidence);
   renderProgressChart(evidence);
-  renderRadar(evidence.topicProfile, "Topic");
+  renderRadar(evidence.topicProfile, "Topic Mastery");
   renderPrintRadars(evidence);
   renderGradeEvidence(evidence);
   renderTopicMap(evidence);
@@ -1471,7 +2663,24 @@ const ReportCore = {
   createChemistrySample,
   buildForecastEvidence,
   buildGradeEvidence,
-  generateParentReport
+  generateParentReport,
+  createCentreSampleSystem,
+  createTestSession,
+  markMcq,
+  markTrueFalse,
+  markNumerical,
+  normaliseTrueFalse,
+  suggestWrittenResponse,
+  markObjectiveResponse,
+  upsertStudentResponse,
+  buildTestModePayload,
+  recoverTimeRemaining,
+  markSubmittedSession,
+  updateSessionScore,
+  buildCentreReportEvidence,
+  buildReportSnapshotFromState,
+  templateSummary,
+  validateTestTemplate
 };
 
 if (typeof window !== "undefined") {
