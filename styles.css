@@ -339,8 +339,8 @@ h1 {
 
 .segmented-control {
   display: inline-grid;
-  grid-template-columns: 1fr 1fr;
-  min-width: 160px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  min-width: 330px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #f6f8fb;

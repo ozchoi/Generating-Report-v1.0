@@ -21,6 +21,16 @@ function sampleEvidence() {
   });
 }
 
+function topicRow({ difficulty, markAwarded, maximumMark, errorCode = "", assessmentId = "A1", topic = "Stoichiometry" }) {
+  return {
+    assessment: { assessmentId, assessmentDate: assessmentId === "A1" ? "2026-01-01" : assessmentId === "A2" ? "2026-02-01" : "2026-03-01" },
+    question: { topic, difficulty, questionType: "Structured calculation" },
+    markAwarded,
+    maximumMark,
+    errorCode
+  };
+}
+
 test("automatic marking handles exact MCQ answers", () => {
   const marked = core.applyAutomaticMarking({
     assessment: { assessmentId: "A1" },
@@ -38,19 +48,92 @@ test("automatic marking handles numeric tolerance and units", () => {
 
 test("assessment progress uses one total per assessment", () => {
   const evidence = sampleEvidence();
-  assert.equal(evidence.overallProgress.assessments.length, 4);
+  assert.equal(evidence.overallProgress.assessments.length, 1);
   assert.equal(evidence.overallProgress.assessments[0].maximumMark, 48);
   assert.equal(evidence.dataQuality.questionCount, 36);
-  assert.equal(evidence.dataQuality.blueprintRowCount, 144);
+  assert.equal(evidence.dataQuality.blueprintRowCount, 36);
 });
 
-test("topic mastery is recency weighted and confidence uses assessments and marks", () => {
+test("baseline topic confidence uses initial evidence", () => {
   const evidence = sampleEvidence();
   const topic = evidence.topicProfile.find((item) => item.label === "Stoichiometry");
   assert.ok(topic);
-  assert.ok(topic.assessmentCount >= 4);
-  assert.notEqual(topic.confidence, "Insufficient evidence");
+  assert.equal(topic.assessmentCount, 1);
+  assert.equal(topic.confidence, "Initial evidence");
   assert.ok(topic.mastery >= 0 && topic.mastery <= 100);
+});
+
+test("ordinary topic mastery is mark weighted with different maximum marks", () => {
+  const rows = [
+    topicRow({ difficulty: "Easy", markAwarded: 1, maximumMark: 1 }),
+    topicRow({ difficulty: "Hard", markAwarded: 0, maximumMark: 3 })
+  ];
+  const mastery = core.calculateTopicMastery(rows);
+  assert.equal(mastery.marksAwarded, 1);
+  assert.equal(mastery.marksAvailable, 4);
+  assert.equal(mastery.mastery, 25);
+});
+
+test("worked example returns 50% ordinary and about 44% adjusted", () => {
+  const rows = [
+    topicRow({ difficulty: "Easy", markAwarded: 1, maximumMark: 1 }),
+    topicRow({ difficulty: "Medium", markAwarded: 1, maximumMark: 1 }),
+    topicRow({ difficulty: "Hard", markAwarded: 0, maximumMark: 2, errorCode: "Calculation method" })
+  ];
+  assert.equal(core.calculateTopicMastery(rows).mastery, 50);
+  assert.ok(Math.abs(core.calculateChallengeAdjustedTopicScore(rows) - 44) < 1);
+  assert.equal(core.calculateDifficultyBreakdown(rows).Easy.accuracy, 100);
+  assert.equal(core.generateTopicInsight(core.buildTopicProfile(rows, new Date("2026-01-01"))[0]).headline, "Basic knowledge is stronger than higher-level application");
+});
+
+test("missing difficulty data is not fabricated", () => {
+  const breakdown = core.calculateDifficultyBreakdown([topicRow({ difficulty: "Easy", markAwarded: 1, maximumMark: 1 })]);
+  assert.equal(breakdown.Medium.accuracy, null);
+  assert.equal(breakdown.Medium.marksAvailable, 0);
+});
+
+test("multiple-assessment confidence increases when evidence accumulates", () => {
+  assert.equal(core.getTopicConfidence({ assessmentCount: 1, marksAvailable: 12, questionCount: 9 }), "Initial evidence");
+  assert.equal(core.getTopicConfidence({ assessmentCount: 4, marksAvailable: 20, questionCount: 9 }), "Reliable evidence");
+  assert.equal(core.getTopicConfidence({ assessmentCount: 6, marksAvailable: 30, questionCount: 15 }), "Strong evidence");
+});
+
+test("core knowledge gap and hard-higher insight rules are deterministic", () => {
+  const weakRows = [
+    topicRow({ difficulty: "Easy", markAwarded: 0, maximumMark: 2 }),
+    topicRow({ difficulty: "Medium", markAwarded: 0, maximumMark: 2 })
+  ];
+  assert.equal(core.generateTopicInsight(core.buildTopicProfile(weakRows, new Date("2026-01-01"))[0]).headline, "Core concepts may require reteaching");
+  const inconsistentRows = [
+    topicRow({ difficulty: "Easy", markAwarded: 0, maximumMark: 2 }),
+    topicRow({ difficulty: "Hard", markAwarded: 2, maximumMark: 2 })
+  ];
+  assert.equal(core.generateTopicInsight(core.buildTopicProfile(inconsistentRows, new Date("2026-01-01"))[0]).headline, "Understanding may be stronger than routine accuracy");
+});
+
+test("unanswered questions stay as zero-mark no-attempt evidence", () => {
+  const marked = core.applyAutomaticMarking({
+    assessment: { assessmentId: "A1" },
+    question: { assessmentId: "A1", questionId: "Q1", questionType: "MCQ", maximumMark: 1, correctAnswer: "B", answerMode: "exact" },
+    response: { assessmentId: "A1", questionId: "Q1", studentAnswer: "", markAwarded: null, markingMethod: "", errorCode: "" }
+  });
+  assert.equal(marked.markAwarded, 0);
+  assert.equal(marked.errorCode, "No attempt");
+});
+
+test("error-code aggregation counts lost marks by topic", () => {
+  const errors = core.aggregateTopicErrors([
+    topicRow({ difficulty: "Hard", markAwarded: 0, maximumMark: 2, errorCode: "Calculation method" }),
+    topicRow({ difficulty: "Medium", markAwarded: 1, maximumMark: 2, errorCode: "Calculation method" })
+  ]);
+  assert.equal(errors[0].errorCode, "Calculation method");
+  assert.equal(errors[0].lostMarks, 3);
+  assert.equal(errors[0].questionCount, 2);
+});
+
+test("no topic score is generated where no marks are available", () => {
+  const profile = core.buildTopicProfile([topicRow({ difficulty: "Easy", markAwarded: 0, maximumMark: 0 })], new Date("2026-01-01"));
+  assert.equal(profile.length, 0);
 });
 
 test("trend requires at least three assessment-level points", () => {

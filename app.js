@@ -30,6 +30,13 @@ const ERROR_CODES = [
 ];
 
 const DIFFICULTIES = ["Easy", "Medium", "Hard", "Exam-style", "Challenge"];
+const DIFFICULTY_WEIGHTS = {
+  Easy: 1,
+  Medium: 1.2,
+  Hard: 1.4,
+  "Exam-style": 1.4,
+  Challenge: 1.5
+};
 const REPORT_DATE = new Date("2026-10-15T00:00:00");
 
 let assessments = [];
@@ -94,9 +101,9 @@ function loadSampleData() {
   questions = sample.questions;
   responses = sample.responses;
   legacyRows = [];
-  elements.assessmentFileStatus.textContent = "Sample: 4 Chemistry assessments loaded";
+  elements.assessmentFileStatus.textContent = "Sample: 1 Chemistry baseline assessment loaded";
   elements.blueprintFileStatus.textContent = "Sample: 36-question blueprint loaded";
-  elements.responsesFileStatus.textContent = "Sample: 144 student responses loaded";
+  elements.responsesFileStatus.textContent = "Sample: 36 student responses loaded";
 }
 
 async function handleDataFile(event, target) {
@@ -214,8 +221,13 @@ function render() {
 
 function renderRadarOnly() {
   if (!evidence) return;
-  const profile = radarMode === "question" ? evidence.questionTypeProfile : evidence.topicProfile;
-  renderRadar(profile, radarMode === "question" ? "Question Type" : "Topic");
+  const profile = radarMode === "question"
+    ? evidence.questionTypeProfile
+    : radarMode === "challenge"
+      ? evidence.challengeAdjustedTopicProfile
+      : evidence.topicProfile;
+  const label = radarMode === "question" ? "Question Type" : radarMode === "challenge" ? "Challenge-adjusted" : "Topic Mastery";
+  renderRadar(profile, label);
 }
 
 function renderSummary(report) {
@@ -289,18 +301,20 @@ function renderProgressChart(report) {
 
 function renderRadar(profile, modeLabel) {
   document.querySelector("#radarHeading").textContent = `Ability Radar: ${modeLabel}`;
-  document.querySelector("#radarDescription").textContent = modeLabel === "Topic"
-    ? "Evidence-weighted mastery by syllabus topic."
-    : "Evidence-weighted performance by question format.";
+  document.querySelector("#radarDescription").textContent = modeLabel === "Topic Mastery"
+    ? "Ordinary mark-weighted topic mastery. This is the main parent-facing score."
+    : modeLabel === "Challenge-adjusted"
+      ? "This view gives slightly greater influence to harder questions and should be interpreted alongside ordinary topic mastery and evidence volume."
+      : "Evidence-weighted performance by question format.";
   document.querySelectorAll("#radarModeControls button").forEach((button) => {
     button.classList.toggle("active", button.dataset.mode === radarMode);
   });
 
   radarChart?.destroy();
   radarChart = createRadarChart(document.querySelector("#radarChart"), profile, modeLabel);
-  const weakest = profile.find((item) => item.status === "Priority" || item.status === "Developing") ?? profile[0];
+  const weakest = profile.find((item) => item.status === "Priority" || item.status === "Possible priority" || item.status === "Developing") ?? profile[0];
   document.querySelector("#topicDetail").innerHTML = weakest
-    ? `<span>${modeLabel} Focus</span><strong>${escapeHtml(weakest.label)} - ${Math.round(weakest.mastery)}%</strong><p>${escapeHtml(weakest.marksAwarded)}/${escapeHtml(weakest.marksAvailable)} marks across ${weakest.assessmentCount} assessments. Confidence: ${escapeHtml(weakest.confidence)}.</p>`
+    ? `<span>${modeLabel} Focus</span><strong>${escapeHtml(weakest.label)} - ${Math.round(weakest.mastery)}%</strong><p>Mastery: ${Math.round(weakest.rawMastery ?? weakest.mastery)}%. Challenge-adjusted: ${Math.round(weakest.challengeAdjustedScore ?? weakest.mastery)}%. Evidence: ${escapeHtml(weakest.marksAwarded)}/${escapeHtml(weakest.marksAvailable)} marks, ${plural(weakest.questionCount, "question")}, ${plural(weakest.assessmentCount, "assessment")}. Confidence: ${escapeHtml(weakest.confidence)}.</p>`
     : "";
 }
 
@@ -317,10 +331,11 @@ function createRadarChart(canvas, profile, label) {
     type: "radar",
     data: {
       labels: profile.map((item) => item.label),
+      topicProfile: profile,
       datasets: [
         {
           label,
-          data: profile.map((item) => Math.round(item.mastery)),
+          data: profile.map((item) => Math.round(item.mastery ?? 0)),
           backgroundColor: "rgba(37, 99, 235, 0.18)",
           borderColor: "#2563eb",
           pointBackgroundColor: "#2563eb",
@@ -401,8 +416,13 @@ function renderDataQuality(report) {
 
 function profileTable(profile) {
   return `
-    <thead><tr><th>Area</th><th>Mastery</th><th>Evidence</th><th>Trend</th><th>Status</th><th>Confidence</th></tr></thead>
-    <tbody>${profile.map((item) => `<tr><td><strong>${escapeHtml(item.label)}</strong></td><td>${Math.round(item.mastery)}%</td><td>${item.marksAwarded}/${item.marksAvailable} marks<br><span class="muted-line">${item.questionCount} questions, ${item.assessmentCount} assessments</span></td><td>${escapeHtml(item.trend)}${item.monthlySlope === null ? "" : `<br><span class="muted-line">${item.monthlySlope >= 0 ? "+" : ""}${item.monthlySlope.toFixed(1)} pts/month</span>`}</td><td><span class="status-pill ${statusClass(item.status)}">${escapeHtml(item.status)}</span></td><td><span class="confidence-pill ${confidenceClass(item.confidence)}">${escapeHtml(item.confidence)}</span></td></tr>`).join("")}</tbody>`;
+    <thead><tr><th>Topic</th><th>Mastery</th><th>Challenge-adjusted</th><th>Easy</th><th>Medium</th><th>Hard</th><th>Evidence</th><th>Confidence</th><th>Status</th><th>Insight</th></tr></thead>
+    <tbody>${profile.map((item) => `<tr title="${escapeHtml(`${item.insight.explanation} ${item.insight.recommendation} ${item.insight.evidenceNote}`)}"><td><strong>${escapeHtml(item.label)}</strong></td><td>${Math.round(item.mastery)}%</td><td>${Math.round(item.challengeAdjustedScore)}%</td><td>${difficultyCell(item, "Easy")}</td><td>${difficultyCell(item, "Medium")}</td><td>${difficultyCell(item, "Hard")}</td><td>${item.marksAwarded}/${item.marksAvailable} marks<br><span class="muted-line">${plural(item.questionCount, "question")}, ${plural(item.assessmentCount, "assessment")}</span></td><td><span class="confidence-pill ${confidenceClass(item.confidence)}">${escapeHtml(item.confidence)}</span></td><td><span class="status-pill ${statusClass(item.status)}">${escapeHtml(item.status)}</span></td><td>${escapeHtml(item.insight.headline)}<br><span class="muted-line">${escapeHtml(item.insight.evidenceNote)}</span></td></tr>`).join("")}</tbody>`;
+}
+
+function difficultyCell(item, difficulty) {
+  const value = item.difficultyBreakdown[difficulty];
+  return value?.accuracy === null ? "—" : `${Math.round(value.accuracy)}%`;
 }
 
 function buildStudentReportEvidence(allAssessments, allQuestions, allResponses, options) {
@@ -414,8 +434,10 @@ function buildStudentReportEvidence(allAssessments, allQuestions, allResponses, 
   const joined = joinQuestionEvidence(selectedAssessments, selectedQuestions, allResponses);
   const validation = validateData(selectedAssessments, selectedQuestions, joined.rawResponses, joined.joined);
   const validResponses = validation.validJoined;
+  const topicProfile = buildTopicProfile(validResponses, options.reportDate);
   const profiles = {
-    topicProfile: buildProfile(validResponses, "topic", options.reportDate),
+    topicProfile,
+    challengeAdjustedTopicProfile: topicProfile.map((item) => ({ ...item, mastery: item.challengeAdjustedScore })),
     subtopicProfile: buildProfile(validResponses, "subtopic", options.reportDate),
     questionTypeProfile: buildProfile(validResponses, "questionType", options.reportDate),
     difficultyProfile: buildProfile(validResponses, "difficulty", options.reportDate),
@@ -423,10 +445,19 @@ function buildStudentReportEvidence(allAssessments, allQuestions, allResponses, 
   };
   const progress = buildAssessmentProgress(selectedAssessments, validResponses);
   const latest = progress.at(-1) ?? null;
-  const overallConfidence = confidenceFromCounts(selectedAssessments.length, validResponses.reduce((sum, item) => sum + item.maximumMark, 0));
-  const reliableProfiles = profiles.topicProfile.filter((item) => item.confidence !== "Insufficient evidence");
-  const strengths = reliableProfiles.filter((item) => item.status === "Strong" || item.status === "Secure").slice(0, 3).map((item) => ({ ...item, type: "Strength" }));
-  const priorities = reliableProfiles.filter((item) => item.status === "Priority" || item.status === "Developing").slice(0, 3).map((item) => ({ ...item, type: "Priority" }));
+  const overallConfidence = getTopicConfidence({
+    assessmentCount: selectedAssessments.length,
+    marksAvailable: validResponses.reduce((sum, item) => sum + item.maximumMark, 0),
+    questionCount: validResponses.length
+  });
+  const strengths = profiles.topicProfile
+    .filter((item) => item.status === "Strong" || item.status === "Secure" || item.status === "Positive indication")
+    .slice(0, 3)
+    .map((item) => ({ ...item, type: item.confidence === "Initial evidence" ? "Initial Strength" : "Strength" }));
+  const priorities = profiles.topicProfile
+    .filter((item) => item.status === "Priority" || item.status === "Possible priority" || item.status === "Developing")
+    .slice(0, 3)
+    .map((item) => ({ ...item, type: item.confidence === "Initial evidence" ? "Possible Priority" : "Priority" }));
 
   return {
     student: { id: selectedAssessments[0]?.studentId ?? "", name: options.studentName },
@@ -510,12 +541,13 @@ function applyAutomaticMarking(item) {
     markingMethod = "automatic";
   }
   if (markAwarded === null || Number.isNaN(markAwarded)) markAwarded = 0;
+  const noAttempt = !response.studentAnswer && markAwarded === 0;
   return {
     ...item,
     markAwarded,
     maximumMark: question.maximumMark,
     markingMethod,
-    errorCode: response.errorCode || (markAwarded === question.maximumMark ? "" : "Knowledge gap"),
+    errorCode: response.errorCode || (noAttempt ? "No attempt" : markAwarded === question.maximumMark ? "" : "Knowledge gap"),
     tutorFeedback: response.tutorFeedback || ""
   };
 }
@@ -538,6 +570,7 @@ function validateData(selectedAssessments, selectedQuestions, rawResponses, join
     maxByAssessment.set(question.assessmentId, (maxByAssessment.get(question.assessmentId) ?? 0) + question.maximumMark);
   }
   for (const item of joined) {
+    if (item.maximumMark <= 0) continue;
     if (item.markAwarded < 0 || item.markAwarded > item.maximumMark) continue;
     if (!item.question.topic || !item.question.difficulty || !item.question.questionType) continue;
     validJoined.push(item);
@@ -595,6 +628,183 @@ function buildProfile(joined, field, reportDate) {
   }).sort((a, b) => a.mastery - b.mastery);
 }
 
+function buildTopicProfile(joined, reportDate) {
+  const groups = groupBy(joined.filter((item) => item.maximumMark > 0), (item) => item.question.topic || "Uncategorised");
+  return [...groups.entries()].map(([label, rows]) => {
+    const masteryStats = calculateTopicMastery(rows);
+    const challengeAdjustedScore = calculateChallengeAdjustedTopicScore(rows);
+    const difficultyBreakdown = calculateDifficultyBreakdown(rows);
+    const assessmentScores = topicAssessmentScores(rows);
+    const trend = calculateTrend(assessmentScores);
+    const assessmentCount = unique(rows.map((item) => item.assessment.assessmentId)).length;
+    const confidence = getTopicConfidence({
+      marksAvailable: masteryStats.marksAvailable,
+      questionCount: rows.length,
+      assessmentCount
+    });
+    const status = getTopicStatus(masteryStats.mastery, confidence);
+    const errorPatterns = aggregateTopicErrors(rows);
+    const longitudinal = weightedMastery(rows, reportDate);
+    const stats = {
+      label,
+      topic: label,
+      ...masteryStats,
+      rawMastery: masteryStats.mastery,
+      longitudinalMastery: longitudinal.mastery,
+      challengeAdjustedScore,
+      difficultyBreakdown,
+      questionCount: rows.length,
+      assessmentCount,
+      confidence,
+      status,
+      errorPatterns,
+      monthlySlope: trend.monthlySlope,
+      trend: trend.label,
+      assessmentScores
+    };
+    return { ...stats, insight: generateTopicInsight(stats) };
+  }).filter((item) => item.marksAvailable > 0).sort((a, b) => a.mastery - b.mastery);
+}
+
+function calculateQuestionScore(item) {
+  if (!item || item.maximumMark <= 0 || item.markAwarded < 0 || item.markAwarded > item.maximumMark) return null;
+  return item.markAwarded / item.maximumMark;
+}
+
+function calculateTopicMastery(rows) {
+  const validRows = rows.filter((item) => calculateQuestionScore(item) !== null);
+  const marksAwarded = round1(sum(validRows.map((item) => item.markAwarded)));
+  const marksAvailable = round1(sum(validRows.map((item) => item.maximumMark)));
+  return {
+    mastery: marksAvailable ? (marksAwarded / marksAvailable) * 100 : null,
+    marksAwarded,
+    marksAvailable
+  };
+}
+
+function calculateChallengeAdjustedTopicScore(rows) {
+  let earned = 0;
+  let available = 0;
+  for (const item of rows) {
+    const normalisedScore = calculateQuestionScore(item);
+    if (normalisedScore === null) continue;
+    const weight = DIFFICULTY_WEIGHTS[normaliseDifficulty(item.question.difficulty)] ?? 1;
+    earned += normalisedScore * item.maximumMark * weight;
+    available += item.maximumMark * weight;
+  }
+  return available ? (earned / available) * 100 : null;
+}
+
+function calculateDifficultyBreakdown(rows) {
+  return Object.fromEntries(DIFFICULTIES.map((difficulty) => {
+    const difficultyRows = rows.filter((item) => normaliseDifficulty(item.question.difficulty) === difficulty);
+    const marksAwarded = round1(sum(difficultyRows.map((item) => item.markAwarded)));
+    const marksAvailable = round1(sum(difficultyRows.map((item) => item.maximumMark)));
+    return [difficulty, {
+      accuracy: marksAvailable ? (marksAwarded / marksAvailable) * 100 : null,
+      marksAwarded,
+      marksAvailable,
+      questionCount: difficultyRows.length,
+      assessmentCount: unique(difficultyRows.map((item) => item.assessment.assessmentId)).length
+    }];
+  }));
+}
+
+function getTopicConfidence({ marksAvailable, questionCount, assessmentCount }) {
+  if (assessmentCount < 2 || marksAvailable < 6 || questionCount < 4) return "Initial evidence";
+  if (assessmentCount < 4 || marksAvailable < 16 || questionCount < 8) return "Emerging evidence";
+  if (assessmentCount >= 6 && marksAvailable >= 30 && questionCount >= 15) return "Strong evidence";
+  return "Reliable evidence";
+}
+
+function getTopicStatus(mastery, confidence) {
+  if (confidence === "Initial evidence") {
+    if (mastery >= 80) return "Positive indication";
+    if (mastery >= 60) return "Generally secure in this test";
+    if (mastery >= 40) return "Developing";
+    return "Possible priority";
+  }
+  if (mastery >= 80) return "Strong";
+  if (mastery >= 65) return "Secure";
+  if (mastery >= 50) return "Developing";
+  return "Priority";
+}
+
+function aggregateTopicErrors(rows) {
+  const lostRows = rows.filter((item) => item.maximumMark - item.markAwarded > 0 && item.errorCode);
+  return [...groupBy(lostRows, (item) => item.errorCode).entries()].map(([errorCode, items]) => ({
+    errorCode,
+    lostMarks: round1(sum(items.map((item) => item.maximumMark - item.markAwarded))),
+    questionCount: items.length
+  })).sort((a, b) => b.lostMarks - a.lostMarks);
+}
+
+function generateTopicInsight(topicStats) {
+  const easy = topicStats.difficultyBreakdown.Easy;
+  const medium = topicStats.difficultyBreakdown.Medium;
+  const hardRows = ["Hard", "Exam-style", "Challenge"].map((key) => topicStats.difficultyBreakdown[key]);
+  const hard = combineDifficultyStats(hardRows);
+  const easyAccuracy = easy.marksAvailable > 0 ? easy.accuracy : null;
+  const mediumAccuracy = medium.marksAvailable > 0 ? medium.accuracy : null;
+  const hardAccuracy = hard.marksAvailable > 0 ? hard.accuracy : null;
+  const initialNote = topicStats.confidence === "Initial evidence"
+    ? "This is an initial pattern and should be checked in future assessments."
+    : "This pattern is supported by evidence across multiple assessments.";
+  let headline = "Mixed performance";
+  let explanation = "The available questions show a mixed pattern across difficulty levels. More evidence is needed to determine whether the main issue is topic knowledge, application or answer technique.";
+  let recommendation = "Include this topic again in the next assessment using a balanced mix of routine, application and explanation questions.";
+
+  if (easyAccuracy !== null && hardAccuracy !== null && easyAccuracy >= 70 && easyAccuracy - hardAccuracy >= 25) {
+    headline = "Basic knowledge is stronger than higher-level application";
+    explanation = "The student performed relatively well on routine questions in this topic, but accuracy fell when the questions required deeper application, multi-step reasoning or fuller scientific explanation.";
+    recommendation = "Use scaffolded exam-style questions that gradually remove prompts and require the student to explain each step.";
+  } else if (easyAccuracy !== null && mediumAccuracy !== null && easyAccuracy < 50 && mediumAccuracy < 50) {
+    headline = "Core concepts may require reteaching";
+    explanation = "Performance was weak in both routine and moderately demanding questions, suggesting that the issue may involve core topic understanding rather than exam technique alone.";
+    recommendation = "Review the underlying concepts using worked examples, retrieval practice and short guided questions before returning to full exam-style tasks.";
+  } else if (topicStats.mastery >= 40 && topicStats.mastery < 65 && hardAccuracy !== null && hardAccuracy < 50) {
+    headline = "Partial understanding is present";
+    explanation = "The student demonstrated some correct knowledge, but did not apply it consistently in more demanding questions.";
+    recommendation = "Focus on connecting basic definitions to calculations, explanations and unfamiliar contexts.";
+  } else if (hardAccuracy !== null && easyAccuracy !== null && hardAccuracy >= easyAccuracy + 15) {
+    headline = "Understanding may be stronger than routine accuracy";
+    explanation = "The student performed comparatively well on the harder question but lost marks in more routine work. This may indicate inconsistency, question misreading or avoidable errors rather than a simple topic knowledge gap.";
+    recommendation = "Introduce a short checking routine covering command words, units, signs and final-answer accuracy.";
+  } else if (topicStats.mastery >= 80 && (hardAccuracy === null || hardAccuracy >= 65)) {
+    headline = topicStats.confidence === "Initial evidence" ? "Positive initial indication" : "Consistent topic strength";
+    explanation = "The student performed consistently well across the available questions in this topic.";
+    recommendation = "Keep this topic active through spaced review and include harder application questions in future checks.";
+  }
+
+  const mainError = topicStats.errorPatterns[0];
+  if (mainError) recommendation += ` ${errorPatternSentence(mainError.errorCode)}`;
+  return { headline, explanation, recommendation, evidenceNote: initialNote };
+}
+
+function combineDifficultyStats(items) {
+  const marksAwarded = sum(items.map((item) => item.marksAwarded));
+  const marksAvailable = sum(items.map((item) => item.marksAvailable));
+  const questionCount = sum(items.map((item) => item.questionCount));
+  const assessmentCount = Math.max(...items.map((item) => item.assessmentCount), 0);
+  return {
+    accuracy: marksAvailable ? (marksAwarded / marksAvailable) * 100 : null,
+    marksAwarded,
+    marksAvailable,
+    questionCount,
+    assessmentCount
+  };
+}
+
+function errorPatternSentence(errorCode) {
+  return {
+    "Incomplete explanation": "The main mark-loss pattern was incomplete explanation. Practise two-mark questions by requiring two clearly linked scientific points.",
+    "Calculation method": "Most lost marks came from calculation method. Use structured steps: formula, substitution, working and final answer with unit.",
+    "Knowledge gap": "The pattern suggests missing content knowledge. Revisit the core concept before further timed practice.",
+    "Command word": "Practise distinguishing between state, describe, explain and calculate.",
+    "No attempt": "The student left some questions unanswered. Completion and time management should be monitored in the next assessment."
+  }[errorCode] ?? "";
+}
+
 function weightedMastery(rows, reportDate) {
   const weightedNumerator = sum(rows.map((item) => {
     const ageDays = daysBetween(new Date(item.assessment.assessmentDate), reportDate);
@@ -640,18 +850,11 @@ function calculateTrend(points) {
 }
 
 function confidenceFromCounts(assessmentCount, marksAvailable) {
-  if (assessmentCount >= 6 && marksAvailable >= 30) return "Strong evidence";
-  if (assessmentCount < 2 || marksAvailable < 6) return "Insufficient evidence";
-  if (assessmentCount < 4 || marksAvailable < 16) return "Emerging evidence";
-  return "Reliable evidence";
+  return getTopicConfidence({ assessmentCount, marksAvailable, questionCount: Math.max(1, Math.round(marksAvailable)) });
 }
 
 function statusFromMastery(mastery, confidence) {
-  if (confidence === "Insufficient evidence") return "Monitor";
-  if (mastery >= 80) return "Strong";
-  if (mastery >= 65) return "Secure";
-  if (mastery >= 50) return "Developing";
-  return "Priority";
+  return getTopicStatus(mastery, confidence);
 }
 
 function buildErrorPatterns(joined) {
@@ -665,6 +868,7 @@ function buildErrorPatterns(joined) {
 }
 
 function buildGradeEvidence(selectedAssessments) {
+  if (selectedAssessments.length === 1) return { available: false, message: "Baseline established" };
   if (selectedAssessments.length < 3) return { available: false, message: "Diagnostic performance only — no reliable grade estimate yet." };
   const compatible = selectedAssessments.every((item) => item.examBoard === selectedAssessments[0].examBoard && item.syllabusCode === selectedAssessments[0].syllabusCode);
   if (!compatible || selectedAssessments[0].examBoard !== "Edexcel") {
@@ -717,14 +921,16 @@ function generateParentReport(report) {
   const strongest = report.strengths[0];
   const priority = report.priorities[0];
   const error = report.errorPatterns[0];
+  const isBaseline = report.dataQuality.assessmentCount === 1;
+  const topicParagraph = topicReportParagraph(report, priority, strongest);
   const progressText = report.overallProgress.assessments.length >= 3
-    ? `The assessment trend is ${report.topicProfile[0]?.trend?.toLowerCase() ?? "being monitored"} across the reporting period.`
-    : "There is not enough assessment history yet to describe a long-term progress trend.";
+    ? `Topic trends are calculated only where at least three assessment-level topic results exist.`
+    : "This is a baseline diagnostic profile. It does not support long-term improving or declining claims yet.";
 
   return `${report.student.name} - ${report.subject.name} Parent Report
 
 Current Performance
-The latest assessment score was ${latest ? `${latest.markAwarded}/${latest.maximumMark}, or ${Math.round(latest.percentage)}%` : "not available"}. This is diagnostic performance only; no reliable examination grade estimate is shown unless compatible boundary data and enough comparable full assessments are available.
+The latest assessment score was ${latest ? `${latest.markAwarded}/${latest.maximumMark}, or ${Math.round(latest.percentage)}%` : "not available"}. ${isBaseline ? "Baseline established." : "This remains diagnostic performance unless compatible boundary data and enough comparable full assessments are available."}
 
 Evidence Coverage
 Across ${report.dataQuality.assessmentCount} assessments, ${report.dataQuality.responseCount} question-level responses provide ${report.dataQuality.totalEvidenceMarks} marks of evidence. Overall confidence is ${report.dataQuality.overallConfidence}. ${legacyRows.length ? "Some uploaded information is summary-only legacy evidence and should be interpreted cautiously." : ""}
@@ -732,11 +938,14 @@ Across ${report.dataQuality.assessmentCount} assessments, ${report.dataQuality.r
 Progress Over Time
 ${progressText} ${report.forecastEvidence.message}
 
+Topic Diagnostic Profile
+${topicParagraph}
+
 Confirmed Strengths
-${strongest ? `${strongest.label} is currently the strongest supported area at ${Math.round(strongest.mastery)}%, based on ${strongest.marksAwarded}/${strongest.marksAvailable} marks across ${strongest.assessmentCount} assessments.` : "No confirmed strength is labelled yet because more evidence is required."}
+${strongest ? `${strongest.label} is currently ${isBaseline ? "a positive initial indication" : "the strongest supported area"} at ${Math.round(strongest.mastery)}%, based on ${strongest.marksAwarded}/${strongest.marksAvailable} marks across ${strongest.assessmentCount} assessments.` : "No confirmed strength is labelled yet because more evidence is required."}
 
 Learning Priorities
-${priority ? `${priority.label} is a priority/developing area at ${Math.round(priority.mastery)}%, based on ${priority.marksAwarded}/${priority.marksAvailable} marks across ${priority.assessmentCount} assessments.` : "No confirmed priority is labelled yet. Possible review areas should be treated as provisional until more evidence is available."}
+${priority ? `${priority.label} is ${isBaseline ? "a possible priority from this assessment" : "a priority/developing area"} at ${Math.round(priority.mastery)}%, based on ${priority.marksAwarded}/${priority.marksAvailable} marks across ${priority.assessmentCount} assessments.` : "No confirmed priority is labelled yet. Possible review areas should be treated as provisional until more evidence is available."}
 
 Question-Type and Difficulty Performance
 ${report.difficultyInsight}
@@ -749,6 +958,17 @@ ${report.recommendations.join(" ") || "Continue collecting marked question-level
 
 Data-Confidence Disclaimer
 Low-evidence topics are labelled cautiously. The report does not infer motivation, intelligence, unsupported percentiles, or long-term progress from a single assessment.`;
+}
+
+function topicReportParagraph(report, priority, strongest) {
+  if (report.dataQuality.assessmentCount === 1) {
+    const topic = priority ?? strongest ?? report.topicProfile[0];
+    if (!topic) return "The topic radar will become available once marked question-level evidence is uploaded.";
+    return `The topic radar provides an initial diagnostic profile based on the student's first assessment. ${topic.label} is currently ${topic.status.toLowerCase()}: ${topic.insight.explanation} As the topic was assessed using ${topic.marksAvailable} marks, this conclusion should be checked in future assessments.`;
+  }
+  const strength = strongest ? `${strongest.label} is supported at ${Math.round(strongest.mastery)}% from ${strongest.marksAvailable} available marks.` : "No reliable strength has enough evidence yet.";
+  const priorityText = priority ? `${priority.label} remains ${priority.status.toLowerCase()} at ${Math.round(priority.mastery)}%. ${priority.insight.headline}.` : "No reliable priority has enough evidence yet.";
+  return `${strength} ${priorityText}`;
 }
 
 function buildRecommendations(errors, priorities) {
@@ -771,7 +991,7 @@ function recommendationForError(errorCode) {
   }[errorCode] ?? "Review the marked response and practise similar question formats.";
 }
 
-function createChemistrySample() {
+function createChemistrySample(assessmentCount = 1) {
   const topics = [
     ["A1", "A", "1", 1, "B", "States of matter", "Gas particle arrangement and movement", "Easy", "MCQ"],
     ["A2", "A", "2", 1, "B", "Electrochemistry", "Electrolysis products", "Easy", "MCQ"],
@@ -814,7 +1034,7 @@ function createChemistrySample() {
   ].map(([id, topic, subtopic, difficulty], index) => [id, "C", String(index + 1), 2, "", topic, subtopic, difficulty, "Short explanation"]);
   const questionRows = [...topics, ...sectionC];
   const dates = ["2026-07-15", "2026-08-15", "2026-09-15", "2026-10-15"];
-  const assessmentList = dates.map((date, index) => ({
+  const assessmentList = dates.slice(0, assessmentCount).map((date, index) => ({
     assessmentId: `CHEM-TRIAL-00${index + 1}`,
     studentId: "STU-001",
     studentName: "Amelia Chan",
@@ -907,7 +1127,7 @@ function normaliseQuestion(row) {
     correctAnswer: text(row.correctAnswer ?? row.CorrectAnswer ?? row["Correct Answer"]),
     topic: text(row.topic ?? row.Topic),
     subtopic: text(row.subtopic ?? row.Subtopic),
-    difficulty: text(row.difficulty ?? row.Difficulty) || "Medium",
+    difficulty: normaliseDifficulty(text(row.difficulty ?? row.Difficulty)),
     questionType: normaliseQuestionType(text(row.questionType ?? row.QuestionType ?? row["Question Type"])),
     assessmentObjective: text(row.assessmentObjective ?? row.AssessmentObjective ?? row["Assessment Objective"]),
     answerMode: text(row.answerMode ?? row.AnswerMode ?? row["Answer Mode"]) || "tutor-marked",
@@ -1017,6 +1237,17 @@ function normaliseQuestionType(value) {
   return matched || value || "Problem solving";
 }
 
+function normaliseDifficulty(value) {
+  const source = String(value || "Medium").trim().toLowerCase().replace(/[-_]/g, " ");
+  if (["easy", "e"].includes(source)) return "Easy";
+  if (["medium", "med", "m"].includes(source)) return "Medium";
+  if (["hard", "difficult", "h"].includes(source)) return "Hard";
+  if (["exam style", "examstyle", "exam", "exam styled"].includes(source)) return "Exam-style";
+  if (["challenge", "challenging", "extension"].includes(source)) return "Challenge";
+  const matched = DIFFICULTIES.find((item) => item.toLowerCase() === source);
+  return matched || "Medium";
+}
+
 function normaliseErrorCode(value) {
   const matched = ERROR_CODES.find((item) => item.toLowerCase() === value.toLowerCase());
   return matched ?? value;
@@ -1082,7 +1313,26 @@ function radarChartOptions() {
         pointLabels: { color: "#17202a", font: { weight: 700 } }
       }
     },
-    plugins: { legend: { display: false } }
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label(context) {
+            const item = context.chart.data.topicProfile?.[context.dataIndex];
+            if (!item) return `${context.dataset.label}: ${context.formattedValue}%`;
+            return [
+              `${item.label}`,
+              `Mastery: ${Math.round(item.rawMastery ?? item.mastery)}%`,
+              `Challenge-adjusted: ${Math.round(item.challengeAdjustedScore ?? item.mastery)}%`,
+              `Evidence: ${item.marksAwarded}/${item.marksAvailable} marks`,
+              `Questions: ${item.questionCount}`,
+              `Assessments: ${item.assessmentCount}`,
+              `Confidence: ${item.confidence}`
+            ];
+          }
+        }
+      }
+    }
   };
 }
 
@@ -1096,8 +1346,11 @@ function statusClass(status) {
   return {
     Strong: "status-strong",
     Secure: "status-good",
+    "Positive indication": "status-good",
+    "Generally secure in this test": "status-good",
     Developing: "status-watch",
     Priority: "status-priority",
+    "Possible priority": "status-priority",
     Monitor: "status-watch"
   }[status] ?? "status-watch";
 }
@@ -1183,6 +1436,10 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function plural(count, noun) {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -1194,6 +1451,16 @@ function escapeHtml(value) {
 const ReportCore = {
   normaliseAnswer,
   markNumericAnswer,
+  normaliseDifficulty,
+  calculateQuestionScore,
+  calculateTopicMastery,
+  calculateChallengeAdjustedTopicScore,
+  calculateDifficultyBreakdown,
+  getTopicConfidence,
+  getTopicStatus,
+  aggregateTopicErrors,
+  generateTopicInsight,
+  buildTopicProfile,
   applyAutomaticMarking,
   buildStudentReportEvidence,
   buildAssessmentProgress,
