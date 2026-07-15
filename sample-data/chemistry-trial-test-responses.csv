@@ -1,0 +1,145 @@
+assessmentId,studentId,questionId,studentAnswer,markAwarded,maximumMark,markingMethod,errorCode,tutorFeedback
+CHEM-TRIAL-001,STU-001,A1,Partial / incorrect,0,1,automatic,Incomplete explanation,Use two linked scientific points in explanation questions.
+CHEM-TRIAL-001,STU-001,A2,B,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,A3,C,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,A4,C,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,A5,B,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,A6,Partial / incorrect,0,1,automatic,Knowledge gap,Use retrieval practice and targeted content review.
+CHEM-TRIAL-001,STU-001,A7,B,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,A8,B,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,A9,B,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,A10,B,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,A11,Partial / incorrect,0,1,automatic,Unit error,Require units on every calculation.
+CHEM-TRIAL-001,STU-001,A12,B,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,B1,True,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,B2,False,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,B3,True,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,B4,Partial / incorrect,0,1,automatic,Calculation method,Use worked examples and step-by-step practice.
+CHEM-TRIAL-001,STU-001,B5,True,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,B6,True,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,B7,False,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,B8,True,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,B9,Partial / incorrect,0,1,automatic,Incomplete explanation,Use two linked scientific points in explanation questions.
+CHEM-TRIAL-001,STU-001,B10,True,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,B11,True,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,B12,True,1,1,automatic,,
+CHEM-TRIAL-001,STU-001,C1,Partial / incorrect,1,2,tutor,Incomplete explanation,Use two linked scientific points in explanation questions.
+CHEM-TRIAL-001,STU-001,C2,Partial / incorrect,1,2,tutor,Knowledge gap,Use retrieval practice and targeted content review.
+CHEM-TRIAL-001,STU-001,C3,Partial / incorrect,1,2,tutor,Unit error,Require units on every calculation.
+CHEM-TRIAL-001,STU-001,C4,Partial / incorrect,1,2,tutor,Calculation method,Use worked examples and step-by-step practice.
+CHEM-TRIAL-001,STU-001,C5,Partial / incorrect,1,2,tutor,Incomplete explanation,Use two linked scientific points in explanation questions.
+CHEM-TRIAL-001,STU-001,C6,Partial / incorrect,1,2,tutor,Knowledge gap,Use retrieval practice and targeted content review.
+CHEM-TRIAL-001,STU-001,C7,Partial / incorrect,1,2,tutor,Unit error,Require units on every calculation.
+CHEM-TRIAL-001,STU-001,C8,Partial / incorrect,1,2,tutor,Calculation method,Use worked examples and step-by-step practice.
+CHEM-TRIAL-001,STU-001,C9,Partial / incorrect,1,2,tutor,Incomplete explanation,Use two linked scientific points in explanation questions.
+CHEM-TRIAL-001,STU-001,C10,Partial / incorrect,1,2,tutor,Knowledge gap,Use retrieval practice and targeted content review.
+CHEM-TRIAL-001,STU-001,C11,Partial / incorrect,1,2,tutor,Unit error,Require units on every calculation.
+CHEM-TRIAL-001,STU-001,C12,Partial / incorrect,1,2,tutor,Calculation method,Use worked examples and step-by-step practice.
+CHEM-TRIAL-002,STU-001,A1,Partial / incorrect,0,1,automatic,Incomplete explanation,Use two linked scientific points in explanation questions.
+CHEM-TRIAL-002,STU-001,A2,B,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,A3,C,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,A4,C,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,A5,B,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,A6,Partial / incorrect,0,1,automatic,Knowledge gap,Use retrieval practice and targeted content review.
+CHEM-TRIAL-002,STU-001,A7,B,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,A8,B,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,A9,B,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,A10,B,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,A11,Partial / incorrect,0,1,automatic,Unit error,Require units on every calculation.
+CHEM-TRIAL-002,STU-001,A12,B,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,B1,True,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,B2,False,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,B3,True,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,B4,Partial / incorrect,0,1,automatic,Calculation method,Use worked examples and step-by-step practice.
+CHEM-TRIAL-002,STU-001,B5,True,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,B6,True,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,B7,False,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,B8,True,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,B9,Partial / incorrect,0,1,automatic,Incomplete explanation,Use two linked scientific points in explanation questions.
+CHEM-TRIAL-002,STU-001,B10,True,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,B11,True,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,B12,True,1,1,automatic,,
+CHEM-TRIAL-002,STU-001,C1,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-002,STU-001,C2,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-002,STU-001,C3,Partial / incorrect,1,2,tutor,Unit error,Require units on every calculation.
+CHEM-TRIAL-002,STU-001,C4,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-002,STU-001,C5,Partial / incorrect,1,2,tutor,Incomplete explanation,Use two linked scientific points in explanation questions.
+CHEM-TRIAL-002,STU-001,C6,Partial / incorrect,1,2,tutor,Knowledge gap,Use retrieval practice and targeted content review.
+CHEM-TRIAL-002,STU-001,C7,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-002,STU-001,C8,Partial / incorrect,1,2,tutor,Calculation method,Use worked examples and step-by-step practice.
+CHEM-TRIAL-002,STU-001,C9,Partial / incorrect,1,2,tutor,Incomplete explanation,Use two linked scientific points in explanation questions.
+CHEM-TRIAL-002,STU-001,C10,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-002,STU-001,C11,Partial / incorrect,1,2,tutor,Unit error,Require units on every calculation.
+CHEM-TRIAL-002,STU-001,C12,Partial / incorrect,1,2,tutor,Calculation method,Use worked examples and step-by-step practice.
+CHEM-TRIAL-003,STU-001,A1,B,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,A2,B,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,A3,C,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,A4,C,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,A5,B,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,A6,C,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,A7,B,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,A8,B,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,A9,B,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,A10,B,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,A11,C,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,A12,B,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,B1,True,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,B2,False,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,B3,True,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,B4,False,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,B5,True,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,B6,True,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,B7,False,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,B8,True,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,B9,True,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,B10,True,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,B11,True,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,B12,True,1,1,automatic,,
+CHEM-TRIAL-003,STU-001,C1,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-003,STU-001,C2,Partial / incorrect,1,2,tutor,Knowledge gap,Use retrieval practice and targeted content review.
+CHEM-TRIAL-003,STU-001,C3,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-003,STU-001,C4,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-003,STU-001,C5,Partial / incorrect,1,2,tutor,Incomplete explanation,Use two linked scientific points in explanation questions.
+CHEM-TRIAL-003,STU-001,C6,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-003,STU-001,C7,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-003,STU-001,C8,Partial / incorrect,1,2,tutor,Calculation method,Use worked examples and step-by-step practice.
+CHEM-TRIAL-003,STU-001,C9,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-003,STU-001,C10,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-003,STU-001,C11,Partial / incorrect,1,2,tutor,Unit error,Require units on every calculation.
+CHEM-TRIAL-003,STU-001,C12,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-004,STU-001,A1,B,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,A2,B,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,A3,C,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,A4,C,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,A5,B,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,A6,C,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,A7,B,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,A8,B,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,A9,B,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,A10,B,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,A11,C,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,A12,B,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,B1,True,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,B2,False,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,B3,True,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,B4,False,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,B5,True,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,B6,True,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,B7,False,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,B8,True,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,B9,True,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,B10,True,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,B11,True,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,B12,True,1,1,automatic,,
+CHEM-TRIAL-004,STU-001,C1,Partial / incorrect,1,2,tutor,Incomplete explanation,Use two linked scientific points in explanation questions.
+CHEM-TRIAL-004,STU-001,C2,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-004,STU-001,C3,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-004,STU-001,C4,Partial / incorrect,1,2,tutor,Calculation method,Use worked examples and step-by-step practice.
+CHEM-TRIAL-004,STU-001,C5,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-004,STU-001,C6,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-004,STU-001,C7,Partial / incorrect,1,2,tutor,Unit error,Require units on every calculation.
+CHEM-TRIAL-004,STU-001,C8,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-004,STU-001,C9,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-004,STU-001,C10,Partial / incorrect,1,2,tutor,Knowledge gap,Use retrieval practice and targeted content review.
+CHEM-TRIAL-004,STU-001,C11,Tutor marked response,2,2,tutor,,
+CHEM-TRIAL-004,STU-001,C12,Tutor marked response,2,2,tutor,,

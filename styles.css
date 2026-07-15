@@ -148,8 +148,9 @@ button:hover {
   line-height: 1.45;
 }
 
-#resultsFile,
-#paperFile {
+#assessmentFile,
+#blueprintFile,
+#responsesFile {
   position: absolute;
   inline-size: 1px;
   block-size: 1px;
@@ -700,7 +701,7 @@ h1 {
 @media print {
   @page {
     size: A4;
-    margin: 12mm;
+    margin: 10mm;
   }
 
   body {
@@ -725,7 +726,7 @@ h1 {
   }
 
   h1 {
-    font-size: 24pt;
+    font-size: 20pt;
   }
 
   .topbar {
@@ -752,13 +753,13 @@ h1 {
 
   .chart-panel,
   .report-panel {
-    padding: 12px;
+    padding: 10px;
   }
 
   .chart-frame,
   .trend-frame,
   .curve-frame {
-    height: 260px;
+    height: 230px;
   }
 
   .interactive-radar-panel {
@@ -770,7 +771,11 @@ h1 {
   }
 
   .print-radar-frame {
-    height: 245px;
+    height: 210px;
+  }
+
+  .print-radar-grid {
+    gap: 10px;
   }
 
   .table-wrap {
@@ -807,8 +812,26 @@ h1 {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .summary-grid strong,
+  .boundary-summary strong,
+  .difficulty-note strong {
+    font-size: 12pt;
+  }
+
+  .panel-heading h2 {
+    font-size: 11pt;
+  }
+
+  .panel-heading p,
+  .annotation-card p,
+  .topic-detail p,
+  .boundary-target,
+  .difficulty-note p {
+    font-size: 8.5pt;
+  }
+
   #reportText {
-    min-height: 260px;
+    min-height: 240px;
     font-size: 9pt;
   }
 }

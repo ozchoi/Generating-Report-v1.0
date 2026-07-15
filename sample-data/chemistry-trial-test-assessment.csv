@@ -1,0 +1,5 @@
+assessmentId,studentId,studentName,qualification,examBoard,syllabusCode,subject,assessmentName,assessmentDate,assessmentType,maximumMark,durationMinutes
+CHEM-TRIAL-001,STU-001,Amelia Chan,IGCSE,Cambridge,0620,Chemistry,Chemistry Trial Test 1,2026-07-15,Baseline diagnostic,48,30
+CHEM-TRIAL-002,STU-001,Amelia Chan,IGCSE,Cambridge,0620,Chemistry,Chemistry Trial Test 2,2026-08-15,Progress check,48,30
+CHEM-TRIAL-003,STU-001,Amelia Chan,IGCSE,Cambridge,0620,Chemistry,Chemistry Trial Test 3,2026-09-15,Progress check,48,30
+CHEM-TRIAL-004,STU-001,Amelia Chan,IGCSE,Cambridge,0620,Chemistry,Chemistry Trial Test 4,2026-10-15,Progress check,48,30

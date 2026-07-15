@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=20260628-print-a4" />
+    <link rel="stylesheet" href="./styles.css?v=20260715-question-level" />
   </head>
   <body>
     <main class="app-shell">
@@ -24,29 +24,37 @@
         </div>
 
         <section class="upload-panel">
-          <label class="upload-box" for="resultsFile">
+          <label class="upload-box" for="assessmentFile">
             <span class="upload-icon">+</span>
-            <strong>Upload results CSV / XLSX</strong>
-            <small>Tutor upload: student scores, question count, difficulty, topic tags</small>
+            <strong>Upload assessment details</strong>
+            <small>CSV / XLSX with assessment ID, student, subject, date, maximum mark</small>
           </label>
-          <input id="resultsFile" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
-          <p class="file-status" id="resultsFileStatus">No results file selected</p>
+          <input id="assessmentFile" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
+          <p class="file-status" id="assessmentFileStatus">No assessment file selected</p>
 
-          <label class="upload-box compact-upload" for="paperFile">
+          <label class="upload-box compact-upload" for="blueprintFile">
             <span class="upload-icon">+</span>
-            <strong>Upload test / exam paper</strong>
-            <small>PDF, PNG, JPG, or other paper scans for tutor reference</small>
+            <strong>Upload question blueprint</strong>
+            <small>CSV / XLSX with question ID, marks, topic, difficulty, answer key</small>
           </label>
-          <input id="paperFile" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,application/pdf,image/*" multiple />
-          <p class="file-status" id="paperFileStatus">No paper file selected</p>
+          <input id="blueprintFile" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
+          <p class="file-status" id="blueprintFileStatus">No blueprint file selected</p>
+
+          <label class="upload-box compact-upload" for="responsesFile">
+            <span class="upload-icon">+</span>
+            <strong>Upload marked student answers</strong>
+            <small>CSV / XLSX with student answers, awarded marks, errors, feedback</small>
+          </label>
+          <input id="responsesFile" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
+          <p class="file-status" id="responsesFileStatus">No response file selected</p>
 
           <div class="csv-columns">
-            <strong>Results columns</strong>
-            <small>student, qualification, subject, exam, date, score, maxScore, skill, questionType, subtopic, questionCount, difficulty</small>
+            <strong>Legacy summary import</strong>
+            <small>Old result-level CSV/XLSX is still accepted as summary-only evidence.</small>
           </div>
           <div class="actions">
             <button id="loadSample" type="button">Use sample data</button>
-            <button id="downloadTemplate" type="button">CSV template</button>
+            <button id="downloadTemplate" type="button">Templates</button>
           </div>
         </section>
 
@@ -71,8 +79,8 @@
         <section class="format-help">
           <h2>CSV columns</h2>
           <p>
-            Add one row per test result. The app groups weekly scores, compares
-            skills, estimates grade position, and drafts a parent report.
+            Add assessment details, question blueprint, and marked student
+            answers. The report uses question-level evidence across time.
           </p>
         </section>
       </aside>
@@ -91,22 +99,22 @@
 
         <section class="summary-grid" aria-label="student summary">
           <article>
-            <span>Latest Score</span>
+            <span>Latest Assessment</span>
             <strong id="latestScore">--</strong>
             <small id="latestMeta">Waiting for data</small>
           </article>
           <article>
-            <span>Weekly Change</span>
+            <span>Progress Change</span>
             <strong id="weeklyChange">--</strong>
             <small>Latest result versus previous result</small>
           </article>
           <article>
-            <span>Estimated Grade</span>
+            <span>Grade Evidence</span>
             <strong id="estimatedGrade">--</strong>
             <small id="gradeMeta">Based on selected qualification</small>
           </article>
           <article>
-            <span>Focus Area</span>
+            <span>Learning Priority</span>
             <strong id="focusArea">--</strong>
             <small>Lowest skill average</small>
           </article>
@@ -116,8 +124,8 @@
           <article class="chart-panel wide">
             <div class="panel-heading">
               <div>
-                <h2>Weekly Progress & Forecast</h2>
-                <p>Actual scores plus conservative, expected, and optimistic paths.</p>
+                <h2>Assessment Progress</h2>
+                <p>One point per assessment, ordered by assessment date.</p>
               </div>
             </div>
             <div class="chart-frame trend-frame">
@@ -168,7 +176,7 @@
           <article class="chart-panel wide">
             <div class="panel-heading">
               <div>
-                <h2>Exam Curve Position</h2>
+                <h2>Exam Readiness / Grade Boundary Position</h2>
                 <p id="curveDescription">Smoothed estimated score distribution with grade boundaries.</p>
               </div>
             </div>
@@ -189,6 +197,26 @@
             <div class="table-wrap">
               <table class="insight-table" id="topicMapTable"></table>
             </div>
+          </article>
+
+          <article class="chart-panel wide-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Evidence and Data Confidence</h2>
+                <p>Validation summary and coverage for the selected report.</p>
+              </div>
+            </div>
+            <div id="dataQualityPanel" class="data-quality-panel"></div>
+          </article>
+
+          <article class="chart-panel wide-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Error Patterns</h2>
+                <p>Main mark-loss patterns from tutor-approved marks.</p>
+              </div>
+            </div>
+            <div id="errorPatternPanel" class="difficulty-panel"></div>
           </article>
 
           <article class="chart-panel wide-panel">
@@ -227,6 +255,7 @@
     </main>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-    <script src="./app.js?v=20260628-print-a4"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="./app.js?v=20260715-question-level"></script>
   </body>
 </html>
