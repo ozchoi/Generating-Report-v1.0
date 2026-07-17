@@ -1,4 +1,6 @@
 const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
 const core = require("../app.js");
 
 function test(name, fn) {
@@ -15,7 +17,7 @@ function test(name, fn) {
 function sampleEvidence() {
   const sample = core.createChemistrySample();
   return core.buildStudentReportEvidence(sample.assessments, sample.questions, sample.responses, {
-    studentName: "Amelia Chan",
+    studentName: "Demo Student A",
     subject: "Chemistry",
     reportDate: new Date("2026-10-15T00:00:00")
   });
@@ -267,4 +269,91 @@ test("report snapshot is saved from structured centre evidence", () => {
   assert.equal(snapshot.studentId, "STU-001");
   assert.equal(snapshot.evidenceJson.latestSession.id, session.id);
   assert.ok(snapshot.generatedNarrative.includes("Parent Report"));
+});
+
+test("real Chemistry fixture contains actual option text and 48 marks", () => {
+  const rows = core.chemistryTrialQuestions();
+  assert.equal(rows.length, 36);
+  assert.equal(rows.reduce((total, question) => total + question.maximumMark, 0), 48);
+  const a1 = rows.find((question) => question.questionId === "A1");
+  assert.ok(a1.questionContent.prompt.includes("particles in a gas"));
+  assert.ok(a1.options.some((option) => option.content.includes("far apart and move randomly")));
+  assert.equal(a1.options.every((option) => option.content === option.label), false);
+});
+
+test("Section C classifications and marking points are question-specific", () => {
+  const rows = core.chemistryTrialQuestions();
+  const c1 = rows.find((question) => question.questionId === "C1");
+  const c5 = rows.find((question) => question.questionId === "C5");
+  const c10 = rows.find((question) => question.questionId === "C10");
+  assert.equal(c5.centreQuestionType, "StructuredCalculation");
+  assert.equal(c5.requiredUnit, "g");
+  assert.equal(c10.centreQuestionType, "ChemicalEquation");
+  assert.ok(c10.correctAnswer.includes("2Cl-"));
+  assert.ok(c1.markingPoints[0].acceptedConcepts.includes("same number of protons"));
+  assert.equal(JSON.stringify(rows).includes("Correct chemistry idea for"), false);
+});
+
+test("written suggestions use actual marking points and remain staff-reviewed", () => {
+  const state = core.createCentreSampleSystem();
+  const c1 = state.questions.find((question) => question.id === "C1");
+  const suggestion = core.suggestWrittenResponse(c1, "same number of protons");
+  assert.equal(suggestion.suggestedMark, 1);
+  assert.equal(suggestion.requiresStaffReview, true);
+  assert.equal(core.markObjectiveResponse(c1, "same number of protons").requiresStaffReview, true);
+});
+
+test("session question snapshots freeze historical content", () => {
+  const state = core.createCentreSampleSystem();
+  const session = core.createTestSession(state, "STU-001", "TEST-CHEM-TRIAL-001", new Date("2026-07-16T12:00:00Z"));
+  const originalPrompt = core.buildTestModePayload(state, session.id).questions[0].questionContent.prompt;
+  state.questions.find((question) => question.id === "A1").questionContent.prompt = "Edited prompt after session start";
+  const frozenPrompt = core.buildTestModePayload(state, session.id).questions[0].questionContent.prompt;
+  assert.equal(frozenPrompt, originalPrompt);
+});
+
+test("storage migration upgrades v1 shape and adds question snapshots", () => {
+  const oldState = core.createCentreSampleSystem();
+  oldState.version = 1;
+  delete oldState.testSessions[0].questionSnapshots;
+  const migrated = core.migrateCentreState(oldState);
+  assert.equal(migrated.version, 2);
+  assert.equal(core.validateCentreState(migrated), true);
+  assert.ok(migrated.testSessions[0].questionSnapshots.length > 0);
+});
+
+test("publishing validation blocks each critical missing item", () => {
+  const state = core.createCentreSampleSystem();
+  const draft = { ...state.testTemplates[0], id: "TEST-BAD", status: "Draft" };
+  state.testTemplates.push(draft);
+  state.testSections.push({ id: "SECTION-BAD", testTemplateId: draft.id, title: "Empty", instructions: "", order: 1, questionRefs: [] });
+  let validation = core.validateTestTemplate(state, draft.id);
+  assert.ok(validation.critical.includes("One or more sections are empty"));
+  const badQuestion = { ...state.questions[0], id: "BAD-MCQ", options: state.questions[0].options.map((option) => ({ ...option, isCorrect: false })) };
+  state.questions.push(badQuestion);
+  state.testSections[0].questionRefs.push({ questionId: badQuestion.id, questionVersion: badQuestion.version, order: 1 });
+  validation = core.validateTestTemplate(state, state.testSections[0].testTemplateId);
+  assert.ok(validation.critical.includes("One or more MCQ questions have no correct option"));
+});
+
+test("test mode payload keeps C5 and C10 input types without mark schemes", () => {
+  const state = core.createCentreSampleSystem();
+  const session = core.createTestSession(state, "STU-001", "TEST-CHEM-TRIAL-001", new Date("2026-07-16T12:00:00Z"));
+  const payload = core.buildTestModePayload(state, session.id);
+  assert.equal(payload.questions.find((question) => question.id === "C5").questionType, "StructuredCalculation");
+  assert.equal(payload.questions.find((question) => question.id === "C10").questionType, "ChemicalEquation");
+  assert.equal(payload.questions.some((question) => question.markingPoints), false);
+});
+
+test("static source exposes repaired controls and optional dependency fallbacks", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  assert.ok(app.includes('data-question-action="preview"'));
+  assert.ok(app.includes('data-builder-action="preview-test"'));
+  assert.ok(app.includes("initCentreSystemSafely"));
+  assert.ok(app.includes("typeof Chart"));
+  assert.ok(app.includes("typeof XLSX"));
+  assert.ok(html.includes("Centre-operated assessment system"));
+  assert.ok(html.includes("Question Bank / 題目庫"));
+  assert.ok(html.includes("?v=1.4.0"));
 });
