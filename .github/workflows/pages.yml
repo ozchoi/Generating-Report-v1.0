@@ -1,0 +1,61 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Build static site
+        run: |
+          rm -rf _site
+          mkdir -p _site/sample-data
+          cp index.html app.js styles.css _site/
+          cp -R sample-data/. _site/sample-data/
+          touch _site/.nojekyll
+          cat > _site/deployment.json <<JSON
+          {
+            "version": "1.4.0",
+            "sha": "${GITHUB_SHA}",
+            "deployedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          JSON
+
+      - name: Verify artifact contents
+        run: |
+          test -f _site/index.html
+          test -f _site/app.js
+          test -f _site/styles.css
+          grep -q "Centre-operated assessment system" _site/index.html
+          grep -q "Question Bank / 題目庫" _site/index.html
+          grep -q "v=1.4.0" _site/index.html
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

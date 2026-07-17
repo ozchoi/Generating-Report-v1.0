@@ -2,8 +2,10 @@ const QUESTION_TYPES = [
   "MCQ",
   "True / False",
   "Definition / recall",
+  "Short answer",
   "Short explanation",
   "Structured calculation",
+  "Chemical equation",
   "Long application",
   "Practical knowledge",
   "Experimental planning",
@@ -37,8 +39,10 @@ const DIFFICULTY_WEIGHTS = {
   "Exam-style": 1.4,
   Challenge: 1.5
 };
-const REPORT_DATE = new Date("2026-10-15T00:00:00");
-const CENTRE_STORAGE_KEY = "abilityReportCentreSystemV1";
+const APP_VERSION = "1.4.0";
+const CENTRE_STORAGE_VERSION = 2;
+const CENTRE_STORAGE_KEY = "abilityReportCentreSystemV2";
+const OLD_CENTRE_STORAGE_KEY = "abilityReportCentreSystemV1";
 
 let assessments = [];
 let questions = [];
@@ -57,7 +61,9 @@ let selectedTestTemplateId = null;
 let activeSessionId = null;
 let activeQuestionIndex = 0;
 let activeTestPayload = null;
+let activeReportSnapshotId = null;
 let testTimerInterval = null;
+let returnGuardTimer = null;
 const responseSaveTimers = new Map();
 
 const hasDom = typeof document !== "undefined";
@@ -75,34 +81,37 @@ const elements = hasDom ? {
 } : {};
 
 if (hasDom) {
-  document.querySelector("#loadSample").addEventListener("click", () => {
+  installGlobalErrorHandlers();
+  document.querySelector("#loadSample")?.addEventListener("click", () => {
     loadSampleData();
     renderSelectors();
     render();
+    setLegacyImportStatus("Sample report evidence loaded. This is summary/report evidence, not a new centre test session.");
+    notify("success", "Sample report evidence loaded");
   });
-  document.querySelector("#downloadTemplate").addEventListener("click", downloadTemplates);
-  document.querySelector("#printReport").addEventListener("click", () => window.print());
-  document.querySelector("#exportReport").addEventListener("click", exportReport);
-  elements.studentSelect.addEventListener("change", () => {
+  document.querySelector("#downloadTemplate")?.addEventListener("click", downloadTemplates);
+  document.querySelector("#printReport")?.addEventListener("click", () => window.print());
+  document.querySelector("#exportReport")?.addEventListener("click", exportReport);
+  elements.studentSelect?.addEventListener("change", () => {
     renderSubjectOptions();
     render();
   });
-  elements.subjectSelect.addEventListener("change", render);
-  elements.qualificationSelect.addEventListener("change", render);
+  elements.subjectSelect?.addEventListener("change", render);
+  elements.qualificationSelect?.addEventListener("change", render);
   document.querySelectorAll("#radarModeControls button").forEach((button) => {
     button.addEventListener("click", () => {
       radarMode = button.dataset.mode;
       renderRadarOnly();
     });
   });
-  elements.assessmentFile.addEventListener("change", (event) => handleDataFile(event, "assessments"));
-  elements.blueprintFile.addEventListener("change", (event) => handleDataFile(event, "questions"));
-  elements.responsesFile.addEventListener("change", (event) => handleDataFile(event, "responses"));
+  elements.assessmentFile?.addEventListener("change", (event) => handleDataFile(event, "assessments"));
+  elements.blueprintFile?.addEventListener("change", (event) => handleDataFile(event, "questions"));
+  elements.responsesFile?.addEventListener("change", (event) => handleDataFile(event, "responses"));
 
-  loadSampleData();
-  renderSelectors();
-  render();
-  initCentreSystem();
+  initCentreSystemSafely();
+  initOptionalReportCharts();
+  initOptionalSpreadsheetImport();
+  loadDeploymentMetadata();
 }
 
 function loadSampleData() {
@@ -122,6 +131,37 @@ function initCentreSystem() {
   selectedTestTemplateId = centreState.testTemplates.find((item) => item.status === "Published")?.id ?? centreState.testTemplates[0]?.id ?? null;
   bindCentreEvents();
   renderCentreSystem();
+  persistCentreState();
+}
+
+function initCentreSystemSafely() {
+  try {
+    initCentreSystem();
+    notify("information", "Centre-operated assessment system ready");
+  } catch (error) {
+    showStaffError("The centre workflow could not initialise.", error);
+    console.error(error);
+  }
+}
+
+function initOptionalReportCharts() {
+  try {
+    loadSampleData();
+    renderSelectors();
+    render();
+    if (typeof Chart === "undefined") {
+      notify("warning", "Chart.js did not load. Tables and centre workflow remain available.");
+    }
+  } catch (error) {
+    showStaffError("Optional report charts could not initialise. The centre workflow is still available.", error);
+    console.error(error);
+  }
+}
+
+function initOptionalSpreadsheetImport() {
+  if (typeof XLSX === "undefined") {
+    notify("warning", "XLSX support did not load. Use CSV or reload while online.");
+  }
 }
 
 function bindCentreEvents() {
@@ -135,6 +175,10 @@ function bindCentreEvents() {
   document.querySelector("#questionSearchInput")?.addEventListener("input", renderQuestionBank);
   document.querySelector("#questionDifficultyFilter")?.addEventListener("change", renderQuestionBank);
   document.querySelector("#questionTypeFilter")?.addEventListener("change", renderQuestionBank);
+  document.querySelector("#questionBankList")?.addEventListener("click", handleQuestionBankAction);
+  document.querySelector("#testBuilderPanel")?.addEventListener("click", handleTestBuilderAction);
+  document.querySelector("#testBuilderPanel")?.addEventListener("input", handleTestBuilderInput);
+  document.querySelector("#testBuilderPanel")?.addEventListener("change", handleTestBuilderChange);
   document.querySelector("#studentSearchResults")?.addEventListener("click", (event) => {
     const item = event.target.closest("[data-student-id]");
     if (!item) return;
@@ -148,11 +192,7 @@ function bindCentreEvents() {
     renderStartTestModule();
   });
   document.querySelector("#startSelectedTest")?.addEventListener("click", () => {
-    if (!selectedCentreStudentId || !selectedTestTemplateId) return;
-    const session = createTestSession(centreState, selectedCentreStudentId, selectedTestTemplateId, new Date());
-    persistCentreState();
-    renderCentreSystem();
-    openTestMode(session.id);
+    startSelectedTestWithDuplicateProtection();
   });
   document.querySelector("#recentSessionsTable")?.addEventListener("click", handleSessionAction);
   document.querySelector("#allSessionsTable")?.addEventListener("click", handleSessionAction);
@@ -162,30 +202,219 @@ function bindCentreEvents() {
   document.querySelector("#reportSnapshotList")?.addEventListener("click", (event) => {
     const item = event.target.closest("[data-report-id]");
     if (!item) return;
-    const snapshot = centreState.reportSnapshots.find((report) => report.id === item.dataset.reportId);
-    if (snapshot) renderEvidenceSnapshot(snapshot.evidenceJson, snapshot.editedNarrative || snapshot.generatedNarrative);
+    openReportSnapshot(item.dataset.reportId);
   });
   document.querySelector("#prevQuestion")?.addEventListener("click", () => moveTestQuestion(-1));
   document.querySelector("#nextQuestion")?.addEventListener("click", () => moveTestQuestion(1));
   document.querySelector("#flagQuestion")?.addEventListener("click", toggleCurrentQuestionFlag);
   document.querySelector("#submitTest")?.addEventListener("click", () => submitActiveTest(false));
-  document.querySelector("#returnToDashboard")?.addEventListener("click", () => closeTestMode("dashboard"));
+  document.querySelector("#submitReviewDialog")?.addEventListener("click", handleSubmitReviewAction);
+  bindReturnDeviceGuard();
+  document.querySelector("#closeStaffDrawer")?.addEventListener("click", closeStaffDrawer);
+  document.querySelector("#exportLocalBackup")?.addEventListener("click", exportLocalBackup);
+  document.querySelector("#importLocalBackup")?.addEventListener("change", importLocalBackup);
+  document.querySelector("#resetDemoData")?.addEventListener("click", resetDemoData);
+  document.querySelector("#saveReportDraft")?.addEventListener("click", saveActiveReportDraft);
+  document.querySelector("#finaliseReport")?.addEventListener("click", finaliseActiveReport);
+  document.querySelector("#revertReport")?.addEventListener("click", revertActiveReport);
+  document.querySelector("#printReportInline")?.addEventListener("click", () => window.print());
+  document.querySelector("#exportPdf")?.addEventListener("click", exportPdfFallback);
+  document.querySelector("#exportReportInline")?.addEventListener("click", exportReport);
+  elements.reportText?.addEventListener("input", preserveActiveReportEdit);
 }
 
 function loadCentreState() {
   if (typeof localStorage === "undefined") return null;
   try {
-    const parsed = JSON.parse(localStorage.getItem(CENTRE_STORAGE_KEY));
-    return parsed?.version === 1 ? parsed : null;
-  } catch {
+    const current = localStorage.getItem(CENTRE_STORAGE_KEY);
+    if (current) {
+      const parsed = JSON.parse(current);
+      if (validateCentreState(parsed)) return migrateCentreState(parsed);
+      throw new Error("Stored v2 data failed schema validation.");
+    }
+    const oldState = localStorage.getItem(OLD_CENTRE_STORAGE_KEY);
+    if (oldState) {
+      const migrated = migrateCentreState(JSON.parse(oldState));
+      if (validateCentreState(migrated)) {
+        notify("information", "Existing v1 browser data was migrated to local schema v2.");
+        return migrated;
+      }
+      offerOldDataRecovery(oldState);
+    }
+  } catch (error) {
+    showStaffError("Stored local prototype data could not be loaded. Demo data has been restored.", error);
+    console.error(error);
     return null;
   }
+  return null;
 }
 
 function persistCentreState() {
   if (typeof localStorage !== "undefined") {
-    localStorage.setItem(CENTRE_STORAGE_KEY, JSON.stringify(centreState));
+    try {
+      centreState.version = CENTRE_STORAGE_VERSION;
+      localStorage.setItem(CENTRE_STORAGE_KEY, JSON.stringify(centreState));
+    } catch (error) {
+      showStaffError("Could not save local prototype data in this browser.", error);
+      notify("error", "Local save failed. Export a backup before refreshing.");
+    }
   }
+}
+
+function validateCentreState(state) {
+  return Boolean(state)
+    && Array.isArray(state.students)
+    && Array.isArray(state.questions)
+    && Array.isArray(state.testTemplates)
+    && Array.isArray(state.testSections)
+    && Array.isArray(state.testSessions)
+    && Array.isArray(state.studentResponses)
+    && Array.isArray(state.reportSnapshots);
+}
+
+function migrateCentreState(state) {
+  if (!state || typeof state !== "object") return null;
+  const next = {
+    version: CENTRE_STORAGE_VERSION,
+    students: Array.isArray(state.students) ? state.students : [],
+    questions: Array.isArray(state.questions) ? state.questions : [],
+    testTemplates: Array.isArray(state.testTemplates) ? state.testTemplates : [],
+    testSections: Array.isArray(state.testSections) ? state.testSections : [],
+    testSessions: Array.isArray(state.testSessions) ? state.testSessions : [],
+    studentResponses: Array.isArray(state.studentResponses) ? state.studentResponses : [],
+    reportSnapshots: Array.isArray(state.reportSnapshots) ? state.reportSnapshots : []
+  };
+  next.testSessions = next.testSessions.map((session) => session.questionSnapshots ? session : {
+    ...session,
+    questionSnapshots: freezeQuestionsForTemplate(next, session.testTemplateId)
+  });
+  return next;
+}
+
+function offerOldDataRecovery(serialisedState) {
+  document.querySelector("#dataManagementStatus").innerHTML = `
+    <span>Old local data found</span>
+    <p>The old data could not be migrated automatically. Export it before resetting demo data.</p>
+    <button type="button" id="exportOldLocalData">Export Old Data</button>`;
+  document.querySelector("#exportOldLocalData")?.addEventListener("click", () => {
+    downloadFile("ability-report-old-local-data.json", serialisedState, "application/json");
+    notify("success", "Old local data exported");
+  });
+  console.warn("Unmigrated old local data:", serialisedState);
+}
+
+function notify(type, message) {
+  if (!hasDom) return;
+  const region = document.querySelector("#toastRegion");
+  if (!region) return;
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+  toast.innerHTML = `<strong>${escapeHtml(typeLabel(type))}</strong><span>${escapeHtml(message)}</span>`;
+  region.append(toast);
+  setTimeout(() => toast.remove(), 4600);
+}
+
+function typeLabel(type) {
+  return {
+    success: "Success",
+    warning: "Warning",
+    error: "Error",
+    information: "Information"
+  }[type] || "Information";
+}
+
+function showStaffError(message, error) {
+  if (!hasDom) return;
+  const panel = document.querySelector("#staffErrorPanel");
+  if (!panel) return;
+  panel.hidden = false;
+  panel.innerHTML = `<strong>${escapeHtml(message)}</strong><p>${escapeHtml(error?.message || String(error || ""))}</p>`;
+}
+
+function installGlobalErrorHandlers() {
+  window.addEventListener("error", (event) => {
+    showStaffError("A non-sensitive staff error was logged.", event.error || event.message);
+    console.error(event.error || event.message);
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    showStaffError("A background action did not complete.", event.reason);
+    console.error(event.reason);
+  });
+}
+
+function openStaffDrawer(title, subtitle, bodyHtml) {
+  const drawer = document.querySelector("#staffDrawer");
+  document.querySelector("#staffDrawerTitle").textContent = title;
+  document.querySelector("#staffDrawerSubtitle").textContent = subtitle || "";
+  document.querySelector("#staffDrawerBody").innerHTML = bodyHtml;
+  drawer.hidden = false;
+}
+
+function closeStaffDrawer() {
+  const drawer = document.querySelector("#staffDrawer");
+  if (drawer) drawer.hidden = true;
+}
+
+function setLegacyImportStatus(message) {
+  const status = document.querySelector("#legacyImportStatus");
+  if (status) status.innerHTML = `<span>Summary-only evidence</span><p>${escapeHtml(message)}</p>`;
+}
+
+function exportLocalBackup() {
+  downloadFile(`ability-report-centre-backup-v${CENTRE_STORAGE_VERSION}.json`, JSON.stringify({
+    exportedAt: new Date().toISOString(),
+    appVersion: APP_VERSION,
+    centreState
+  }, null, 2), "application/json");
+  notify("success", "Local backup exported");
+}
+
+async function importLocalBackup(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  try {
+    const parsed = JSON.parse(await file.text());
+    const importedState = parsed.centreState || parsed;
+    const migrated = migrateCentreState(importedState);
+    if (!validateCentreState(migrated)) throw new Error("Backup did not match the centre-state schema.");
+    centreState = migrated;
+    selectedCentreStudentId = centreState.students[0]?.studentId ?? null;
+    selectedTestTemplateId = centreState.testTemplates[0]?.id ?? null;
+    persistCentreState();
+    renderCentreSystem();
+    document.querySelector("#dataManagementStatus").innerHTML = `<span>Imported</span><p>${escapeHtml(file.name)} was imported into this browser only.</p>`;
+    notify("success", "Local backup imported");
+  } catch (error) {
+    showStaffError("Import failed.", error);
+    notify("error", "Import failed. The existing local data was not changed.");
+  } finally {
+    event.target.value = "";
+  }
+}
+
+function resetDemoData() {
+  if (!window.confirm("Reset demo data in this browser? This does not affect any external system.")) return;
+  centreState = createCentreSampleSystem();
+  selectedCentreStudentId = centreState.students[0]?.studentId ?? null;
+  selectedTestTemplateId = centreState.testTemplates.find((item) => item.status === "Published")?.id ?? centreState.testTemplates[0]?.id ?? null;
+  persistCentreState();
+  renderCentreSystem();
+  document.querySelector("#dataManagementStatus").innerHTML = `<span>Reset complete</span><p>Demo centre data has been restored in this browser.</p>`;
+  notify("success", "Demo data reset");
+}
+
+function loadDeploymentMetadata() {
+  fetch(`./deployment.json?v=${encodeURIComponent(APP_VERSION)}`)
+    .then((response) => response.ok ? response.json() : null)
+    .then((metadata) => {
+      const footer = document.querySelector("#versionFooter");
+      if (!footer || !metadata) return;
+      footer.textContent = `App version: v${metadata.version || APP_VERSION} · Deployment: ${(metadata.sha || "local").slice(0, 7)} · Deployed: ${metadata.deployedAt || "unknown"} · Storage schema: v${CENTRE_STORAGE_VERSION}`;
+    })
+    .catch(() => {
+      const footer = document.querySelector("#versionFooter");
+      if (footer) footer.textContent = `App version: v${APP_VERSION} · Deployment: local · Deployed: unknown · Storage schema: v${CENTRE_STORAGE_VERSION}`;
+    });
 }
 
 function createCentreSampleSystem() {
@@ -193,10 +422,10 @@ function createCentreSampleSystem() {
   const now = "2026-07-16T10:30:00.000Z";
   const students = [{
     studentId: "STU-001",
-    studentName: "Amelia Chan",
-    chineseName: "陳雅麗",
-    contactNumber: "9123 4567",
-    school: "Harbour College",
+    studentName: "Demo Student A",
+    chineseName: "示範學生A",
+    contactNumber: "DEMO-0000",
+    school: "Demo Harbour College",
     schoolYear: "Year 10",
     programme: "IGCSE Chemistry"
   }];
@@ -240,6 +469,7 @@ function createCentreSampleSystem() {
     timeLimitMinutes: 30,
     serverDeadline: "2026-07-16T11:00:00.000Z",
     timeUsedSeconds: 1440,
+    questionSnapshots: freezeQuestionsForTemplate({ questions: questionBank, testSections }, testTemplate.id),
     createdAt: "2026-07-16T10:30:00.000Z",
     updatedAt: "2026-07-16T11:12:00.000Z"
   };
@@ -270,7 +500,7 @@ function createCentreSampleSystem() {
     };
   });
   const state = {
-    version: 1,
+    version: CENTRE_STORAGE_VERSION,
     students,
     questions: questionBank,
     testTemplates: [testTemplate],
@@ -285,10 +515,8 @@ function createCentreSampleSystem() {
 }
 
 function createCentreQuestion(question, timestamp) {
-  const questionType = question.questionType === "MCQ" ? "MCQ" : question.questionType === "True / False" ? "TrueFalse" : "ShortAnswer";
-  const prompt = questionType === "ShortAnswer"
-    ? `${question.topic}: explain ${question.subtopic.toLowerCase()}.`
-    : `${question.topic}: ${question.subtopic}.`;
+  const questionType = question.centreQuestionType || (question.questionType === "MCQ" ? "MCQ" : question.questionType === "True / False" ? "TrueFalse" : "ShortAnswer");
+  const prompt = question.questionContent?.prompt || `${question.topic}: ${question.subtopic}.`;
   return {
     id: question.questionId,
     section: question.section,
@@ -300,16 +528,10 @@ function createCentreQuestion(question, timestamp) {
     subtopic: question.subtopic,
     difficulty: normaliseDifficulty(question.difficulty),
     questionType,
-    title: `${question.section}${question.questionNumber} ${question.topic}`,
+    title: question.title || `${question.section}${question.questionNumber} ${question.topic}`,
     questionContent: { prompt },
     maximumMark: question.maximumMark,
-    options: questionType === "MCQ" ? ["A", "B", "C", "D"].map((label) => ({
-      id: `${question.questionId}-${label}`,
-      label,
-      content: `${label}`,
-      isCorrect: normaliseAnswer(label) === normaliseAnswer(question.correctAnswer),
-      errorCode: normaliseAnswer(label) === normaliseAnswer(question.correctAnswer) ? "" : "Misconception"
-    })) : questionType === "TrueFalse" ? ["True", "False"].map((label) => ({
+    options: question.options?.length ? question.options : questionType === "TrueFalse" ? ["True", "False"].map((label) => ({
       id: `${question.questionId}-${label}`,
       label,
       content: label,
@@ -317,17 +539,14 @@ function createCentreQuestion(question, timestamp) {
       errorCode: normaliseTrueFalse(label) === normaliseTrueFalse(question.correctAnswer) ? "" : "Question interpretation"
     })) : [],
     correctAnswer: question.correctAnswer,
-    acceptedAnswers: question.correctAnswer ? [question.correctAnswer] : [],
-    markingPoints: questionType === "ShortAnswer" ? [
-      { id: `${question.questionId}-MP1`, description: `Correct chemistry idea for ${question.subtopic}`, markValue: 1, acceptedConcepts: [question.topic, question.subtopic] },
-      { id: `${question.questionId}-MP2`, description: "Linked explanation using scientific wording", markValue: 1, acceptedConcepts: ["because", "therefore", "particles", "ions", "energy"] }
-    ] : [],
+    acceptedAnswers: question.acceptedAnswers || (question.correctAnswer ? [question.correctAnswer] : []),
+    markingPoints: question.markingPoints || [],
     numericalTolerance: question.numericalTolerance,
     requiredUnit: question.requiredUnit,
     distractorErrors: {},
     assessmentObjective: null,
     coreOrSupplement: "Both",
-    source: "Centre-created IGCSE Chemistry trial sample",
+    source: question.source || "IGCSE Chemistry Trial Test (Mixed Difficulty) question paper and mark scheme",
     copyrightNote: "Internal teaching sample.",
     status: "Published",
     usageCount: 1,
@@ -439,28 +658,158 @@ function renderQuestionBank() {
         <span class="meta-badge">Used ${question.usageCount}</span>
       </div>
       <div class="session-badges">
-        <button type="button">Preview</button>
-        <button type="button">Duplicate</button>
-        <button type="button">Add to Test</button>
-        <button type="button">View Results</button>
+        <button type="button" data-question-action="preview" data-question-id="${question.id}">Preview</button>
+        <button type="button" data-question-action="duplicate" data-question-id="${question.id}">Duplicate</button>
+        <button type="button" data-question-action="add-to-test" data-question-id="${question.id}">Add to Test</button>
+        <button type="button" data-question-action="view-results" data-question-id="${question.id}">View Results</button>
       </div>
     </article>`).join("");
 }
 
+function handleQuestionBankAction(event) {
+  const button = event.target.closest("[data-question-action]");
+  if (!button) return;
+  const question = centreState.questions.find((item) => item.id === button.dataset.questionId);
+  if (!question) return;
+  const action = button.dataset.questionAction;
+  if (action === "preview") previewQuestion(question);
+  if (action === "duplicate") duplicateQuestion(question);
+  if (action === "add-to-test") addQuestionToEditableTest(question);
+  if (action === "view-results") viewQuestionResults(question);
+}
+
+function previewQuestion(question) {
+  const options = question.options?.length
+    ? `<ul>${question.options.map((option) => `<li><strong>${escapeHtml(option.label)}.</strong> ${escapeHtml(option.content)}${option.isCorrect ? " <strong>(correct)</strong>" : ""}</li>`).join("")}</ul>`
+    : "<p>No options for this question type.</p>";
+  const marking = question.markingPoints?.length
+    ? `<ul>${question.markingPoints.map((point) => `<li>${escapeHtml(point.description)} (${point.markValue})<br><span class="muted-line">${escapeHtml((point.acceptedConcepts || []).join("; "))}</span></li>`).join("")}</ul>`
+    : "<p>No written marking points.</p>";
+  openStaffDrawer("Question Preview", `${question.id} · version ${question.version}`, `
+    <div class="drawer-stack">
+      <h3>${escapeHtml(question.title)}</h3>
+      <p>${escapeHtml(question.questionContent.prompt)}</p>
+      <div class="boundary-summary">
+        <div><span>Topic</span><strong>${escapeHtml(question.topic || "Missing")}</strong></div>
+        <div><span>Subtopic</span><strong>${escapeHtml(question.subtopic || "Missing")}</strong></div>
+        <div><span>Difficulty</span><strong>${escapeHtml(question.difficulty || "Missing")}</strong></div>
+        <div><span>Question type</span><strong>${escapeHtml(question.questionType)}</strong></div>
+        <div><span>Maximum mark</span><strong>${question.maximumMark}</strong></div>
+        <div><span>Status</span><strong>${escapeHtml(question.status)}</strong></div>
+      </div>
+      <h3>Options</h3>${options}
+      <h3>Correct answer</h3><p>${escapeHtml(question.correctAnswer || "Staff marked")}</p>
+      <h3>Marking points</h3>${marking}
+      <h3>Source/version</h3><p>${escapeHtml(question.source || "Centre question bank")} · Version ${question.version}</p>
+    </div>`);
+}
+
+function duplicateQuestion(question) {
+  const now = new Date().toISOString();
+  const copy = {
+    ...structuredCloneSafe(question),
+    id: makeId("Q-DRAFT"),
+    title: `${question.title} — Copy`,
+    version: 1,
+    status: "Draft",
+    usageCount: 0,
+    createdAt: now,
+    updatedAt: now
+  };
+  copy.options = (copy.options || []).map((option) => ({ ...option, id: `${copy.id}-${option.label}` }));
+  centreState.questions.unshift(copy);
+  persistCentreState();
+  document.querySelector("#questionSearchInput").value = copy.id;
+  renderQuestionBank();
+  notify("success", `Duplicated ${question.id} as ${copy.id}`);
+}
+
+function addQuestionToEditableTest(question) {
+  const template = ensureEditableDraftTest();
+  let section = centreState.testSections.find((item) => item.testTemplateId === template.id);
+  if (!section) {
+    section = createTestSection(template.id, "Section A", 1);
+    centreState.testSections.push(section);
+  }
+  const duplicate = centreState.testSections
+    .filter((item) => item.testTemplateId === template.id)
+    .some((item) => item.questionRefs.some((ref) => ref.questionId === question.id));
+  if (duplicate && !window.confirm("This question is already in the selected draft test. Add it again?")) return;
+  section.questionRefs.push({ questionId: question.id, questionVersion: question.version, order: section.questionRefs.length + 1 });
+  template.updatedAt = new Date().toISOString();
+  selectedTestTemplateId = template.id;
+  persistCentreState();
+  renderCentreSystem();
+  notify("success", `${question.id} added to ${template.name}`);
+}
+
+function viewQuestionResults(question) {
+  const attempts = centreState.studentResponses.filter((response) => response.questionId === question.id && response.markAwarded !== null && response.markAwarded !== undefined);
+  if (!attempts.length) {
+    openStaffDrawer("Question Results", question.id, "<p>No student-response evidence is available for this question yet.</p>");
+    return;
+  }
+  const marksAvailable = sum(attempts.map((item) => item.maximumMark));
+  const marksEarned = sum(attempts.map((item) => item.markAwarded));
+  const wrongOptions = attempts
+    .filter((item) => item.markAwarded < item.maximumMark && typeof item.answer === "string")
+    .map((item) => item.answer)
+    .filter(Boolean);
+  const commonWrong = mostCommon(wrongOptions) || "No repeated wrong option";
+  const errors = [...groupBy(attempts.flatMap((item) => item.errorCodes || []), (item) => item).entries()]
+    .map(([code, rows]) => `${code}: ${rows.length}`)
+    .join("; ") || "No repeated error pattern";
+  openStaffDrawer("Question Results", question.id, `
+    <div class="boundary-summary">
+      <div><span>Attempts</span><strong>${attempts.length}</strong></div>
+      <div><span>Accuracy</span><strong>${marksAvailable ? Math.round((marksEarned / marksAvailable) * 100) : 0}%</strong></div>
+      <div><span>Marks</span><strong>${round1(marksEarned)}/${marksAvailable}</strong></div>
+      <div><span>Difficulty</span><strong>${escapeHtml(question.difficulty)}</strong></div>
+      <div><span>Common wrong option</span><strong>${escapeHtml(commonWrong)}</strong></div>
+      <div><span>Error patterns</span><strong>${escapeHtml(errors)}</strong></div>
+    </div>`);
+}
+
 function renderTestBuilder() {
   const template = templateById(selectedTestTemplateId) || centreState.testTemplates[0];
+  if (!template) {
+    document.querySelector("#testBuilderPanel").innerHTML = `<article class="builder-card"><button type="button" data-builder-action="create-test">Create New Test</button></article>`;
+    return;
+  }
   const summary = templateSummary(centreState, template.id);
   const validation = validateTestTemplate(centreState, template.id);
+  const editable = template.status === "Draft";
+  const sections = centreState.testSections.filter((section) => section.testTemplateId === template.id).sort((a, b) => a.order - b.order);
+  const questionOptions = centreState.questions.map((question) => `<option value="${question.id}">${escapeHtml(question.id)} · ${escapeHtml(question.title)}</option>`).join("");
+  const sectionOptions = sections.map((section) => `<option value="${section.id}">${escapeHtml(section.title)}</option>`).join("");
   document.querySelector("#testBuilderPanel").innerHTML = `
+    <article class="builder-card builder-card-wide">
+      <div class="builder-toolbar">
+        <label>Selected test
+          <select data-builder-field="selectedTemplate">${centreState.testTemplates.map((item) => `<option value="${item.id}" ${item.id === template.id ? "selected" : ""}>${escapeHtml(item.name)} (${escapeHtml(item.status)})</option>`).join("")}</select>
+        </label>
+        <button type="button" data-builder-action="create-test">Create New Test</button>
+        <button type="button" data-builder-action="duplicate-test" data-template-id="${template.id}">Duplicate Test</button>
+      </div>
+      <p class="muted-line">${editable ? "Draft is editable." : "Published tests are locked. Duplicate to create an editable draft."}</p>
+    </article>
     <article class="builder-card">
-      <h3>${escapeHtml(template.name)}</h3>
-      <p>${escapeHtml(template.description)}</p>
+      <h3>Test details</h3>
+      <label>Name<input data-template-field="name" value="${escapeHtml(template.name)}" ${editable ? "" : "disabled"} /></label>
+      <label>Description<textarea data-template-field="description" rows="4" ${editable ? "" : "disabled"}>${escapeHtml(template.description || "")}</textarea></label>
+      <label>Time limit (minutes)<input type="number" min="1" data-template-field="timeLimitMinutes" value="${template.timeLimitMinutes}" ${editable ? "" : "disabled"} /></label>
       <div class="boundary-summary">
         <div><span>Total questions</span><strong>${summary.questionCount}</strong></div>
         <div><span>Total marks</span><strong>${summary.maximumMark}</strong></div>
         <div><span>Time limit</span><strong>${template.timeLimitMinutes} min</strong></div>
       </div>
       <p class="boundary-target">${escapeHtml(summary.topicCount)} topics covered. Status: ${escapeHtml(template.status)}.</p>
+      <div class="session-badges">
+        <button type="button" data-builder-action="save-draft" data-template-id="${template.id}" ${editable ? "" : "disabled"}>Save Draft</button>
+        <button type="button" data-builder-action="preview-test" data-template-id="${template.id}">Preview Student Test</button>
+        <button type="button" data-builder-action="preview-mark-scheme" data-template-id="${template.id}">Preview Mark Scheme</button>
+        <button type="button" data-builder-action="publish-test" data-template-id="${template.id}" ${editable ? "" : "disabled"}>Publish</button>
+      </div>
     </article>
     <article class="builder-card">
       <h3>Blueprint summary</h3>
@@ -471,10 +820,306 @@ function renderTestBuilder() {
     </article>
     <article class="builder-card">
       <h3>Validation</h3>
-      ${validation.critical.length ? `<p><strong>Cannot publish:</strong> ${escapeHtml(validation.critical.join("; "))}</p>` : "<p>No critical errors. This test can be published.</p>"}
-      ${validation.warnings.length ? `<p><strong>Warnings:</strong> ${escapeHtml(validation.warnings.join("; "))}</p>` : "<p>No warnings.</p>"}
-      <button type="button">Preview test</button>
+      ${validation.critical.length ? `<ul class="validation-list">${validation.critical.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "<p>No critical errors. This test can be published.</p>"}
+      ${validation.warnings.length ? `<p><strong>Warnings:</strong></p><ul class="validation-list">${validation.warnings.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "<p>No warnings.</p>"}
+    </article>
+    <article class="builder-card builder-card-wide">
+      <h3>Sections and questions</h3>
+      <div class="builder-toolbar">
+        <button type="button" data-builder-action="add-section" data-template-id="${template.id}" ${editable ? "" : "disabled"}>Add Section</button>
+        <label>Question
+          <select data-builder-field="addQuestionId" ${editable ? "" : "disabled"}>${questionOptions}</select>
+        </label>
+        <label>Section
+          <select data-builder-field="addSectionId" ${editable ? "" : "disabled"}>${sectionOptions}</select>
+        </label>
+        <button type="button" data-builder-action="add-selected-question" data-template-id="${template.id}" ${editable ? "" : "disabled"}>Add Selected Question</button>
+      </div>
+      <div class="builder-sections">
+        ${sections.map((section) => sectionBuilderMarkup(section, editable)).join("") || "<p>No sections yet.</p>"}
+      </div>
     </article>`;
+}
+
+function sectionBuilderMarkup(section, editable) {
+  const refs = section.questionRefs.slice().sort((a, b) => a.order - b.order);
+  return `<section class="builder-section" data-section-id="${section.id}">
+    <label>Section name<input data-section-title="${section.id}" value="${escapeHtml(section.title)}" ${editable ? "" : "disabled"} /></label>
+    <div class="table-wrap"><table class="difficulty-table">
+      <thead><tr><th>Order</th><th>Question</th><th>Move to section</th><th>Actions</th></tr></thead>
+      <tbody>${refs.map((ref, index) => {
+        const question = centreState.questions.find((item) => item.id === ref.questionId && item.version === ref.questionVersion) || centreState.questions.find((item) => item.id === ref.questionId);
+        return `<tr>
+          <td>${index + 1}</td>
+          <td><strong>${escapeHtml(question?.id || ref.questionId)}</strong><br><span class="muted-line">${escapeHtml(question?.title || "Missing question")}</span></td>
+          <td><select data-move-section-ref="${section.id}:${ref.questionId}" ${editable ? "" : "disabled"}>${centreState.testSections.filter((item) => item.testTemplateId === section.testTemplateId).map((target) => `<option value="${target.id}" ${target.id === section.id ? "selected" : ""}>${escapeHtml(target.title)}</option>`).join("")}</select></td>
+          <td><div class="session-badges">
+            <button type="button" data-builder-action="move-question-up" data-section-id="${section.id}" data-question-id="${ref.questionId}" ${editable && index > 0 ? "" : "disabled"}>Up</button>
+            <button type="button" data-builder-action="move-question-down" data-section-id="${section.id}" data-question-id="${ref.questionId}" ${editable && index < refs.length - 1 ? "" : "disabled"}>Down</button>
+            <button type="button" data-builder-action="remove-question" data-section-id="${section.id}" data-question-id="${ref.questionId}" ${editable ? "" : "disabled"}>Remove</button>
+          </div></td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="4">This section is empty.</td></tr>`}</tbody>
+    </table></div>
+  </section>`;
+}
+
+function handleTestBuilderInput(event) {
+  const templateField = event.target.closest("[data-template-field]");
+  const sectionField = event.target.closest("[data-section-title]");
+  if (templateField) {
+    const template = templateById(selectedTestTemplateId);
+    if (!template || template.status !== "Draft") return;
+    const field = templateField.dataset.templateField;
+    template[field] = field === "timeLimitMinutes" ? Math.max(1, Number(templateField.value || 1)) : templateField.value;
+    template.updatedAt = new Date().toISOString();
+    persistCentreState();
+  }
+  if (sectionField) {
+    const section = centreState.testSections.find((item) => item.id === sectionField.dataset.sectionTitle);
+    const template = section ? templateById(section.testTemplateId) : null;
+    if (!section || template?.status !== "Draft") return;
+    section.title = sectionField.value;
+    persistCentreState();
+  }
+}
+
+function handleTestBuilderChange(event) {
+  const field = event.target.closest("[data-builder-field]");
+  const moveSelect = event.target.closest("[data-move-section-ref]");
+  if (field?.dataset.builderField === "selectedTemplate") {
+    selectedTestTemplateId = field.value;
+    renderTestBuilder();
+    return;
+  }
+  if (moveSelect) {
+    const [fromSectionId, questionId] = moveSelect.dataset.moveSectionRef.split(":");
+    moveQuestionToSection(fromSectionId, moveSelect.value, questionId);
+  }
+}
+
+function handleTestBuilderAction(event) {
+  const button = event.target.closest("[data-builder-action]");
+  if (!button) return;
+  const action = button.dataset.builderAction;
+  if (action === "create-test") createNewDraftTest();
+  if (action === "duplicate-test") duplicateTest(button.dataset.templateId);
+  if (action === "save-draft") saveDraftTest(button.dataset.templateId);
+  if (action === "publish-test") publishTest(button.dataset.templateId);
+  if (action === "add-section") addSectionToTest(button.dataset.templateId);
+  if (action === "add-selected-question") addSelectedQuestionToBuilder(button.dataset.templateId);
+  if (action === "move-question-up") moveQuestionWithinSection(button.dataset.sectionId, button.dataset.questionId, -1);
+  if (action === "move-question-down") moveQuestionWithinSection(button.dataset.sectionId, button.dataset.questionId, 1);
+  if (action === "remove-question") removeQuestionFromSection(button.dataset.sectionId, button.dataset.questionId);
+  if (action === "preview-test") previewStudentTest(button.dataset.templateId);
+  if (action === "preview-mark-scheme") previewMarkScheme(button.dataset.templateId);
+}
+
+function createNewDraftTest() {
+  const now = new Date().toISOString();
+  const template = {
+    id: makeId("TEST-DRAFT"),
+    name: "Untitled Draft Test",
+    description: "Draft centre test.",
+    subjectName: "Chemistry",
+    qualification: "IGCSE",
+    examBoard: "Cambridge",
+    syllabusCode: "0620",
+    testType: "Centre draft",
+    instructions: "Answer all questions.",
+    timeLimitMinutes: 30,
+    status: "Draft",
+    createdAt: now,
+    updatedAt: now
+  };
+  centreState.testTemplates.unshift(template);
+  centreState.testSections.push(createTestSection(template.id, "Section A", 1));
+  selectedTestTemplateId = template.id;
+  persistCentreState();
+  renderCentreSystem();
+  notify("success", "New draft test created");
+  return template;
+}
+
+function duplicateTest(templateId) {
+  const source = templateById(templateId);
+  if (!source) return null;
+  const now = new Date().toISOString();
+  const copy = { ...structuredCloneSafe(source), id: makeId("TEST-DRAFT"), name: `${source.name} — Copy`, status: "Draft", createdAt: now, updatedAt: now };
+  centreState.testTemplates.unshift(copy);
+  centreState.testSections
+    .filter((section) => section.testTemplateId === source.id)
+    .sort((a, b) => a.order - b.order)
+    .forEach((section) => {
+      centreState.testSections.push({
+        ...structuredCloneSafe(section),
+        id: makeId("SECTION"),
+        testTemplateId: copy.id,
+        questionRefs: section.questionRefs.map((ref) => ({ ...ref }))
+      });
+    });
+  selectedTestTemplateId = copy.id;
+  persistCentreState();
+  renderCentreSystem();
+  notify("success", "Test duplicated as a draft");
+  return copy;
+}
+
+function ensureEditableDraftTest() {
+  const selected = templateById(selectedTestTemplateId);
+  if (selected?.status === "Draft") return selected;
+  const existingDraft = centreState.testTemplates.find((item) => item.status === "Draft");
+  if (existingDraft) {
+    selectedTestTemplateId = existingDraft.id;
+    notify("information", `Using existing draft test: ${existingDraft.name}`);
+    return existingDraft;
+  }
+  notify("information", "No editable draft existed, so a new draft test was created.");
+  return createNewDraftTest();
+}
+
+function createTestSection(testTemplateId, title, order) {
+  return { id: makeId("SECTION"), testTemplateId, title, instructions: "", order, questionRefs: [] };
+}
+
+function saveDraftTest(templateId) {
+  const template = templateById(templateId);
+  if (!template || template.status !== "Draft") return;
+  template.updatedAt = new Date().toISOString();
+  persistCentreState();
+  renderCentreSystem();
+  notify("success", "Test draft saved");
+}
+
+function publishTest(templateId) {
+  const template = templateById(templateId);
+  if (!template || template.status !== "Draft") return;
+  const validation = validateTestTemplate(centreState, templateId);
+  if (validation.critical.length) {
+    openStaffDrawer("Cannot Publish Test", template.name, `<ul>${validation.critical.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`);
+    notify("warning", "Publishing blocked by validation errors");
+    return;
+  }
+  template.status = "Published";
+  template.updatedAt = new Date().toISOString();
+  persistCentreState();
+  renderCentreSystem();
+  notify("success", "Test published");
+}
+
+function addSectionToTest(templateId) {
+  const template = templateById(templateId);
+  if (!template || template.status !== "Draft") return;
+  const sections = centreState.testSections.filter((item) => item.testTemplateId === templateId);
+  centreState.testSections.push(createTestSection(templateId, `Section ${String.fromCharCode(65 + sections.length)}`, sections.length + 1));
+  persistCentreState();
+  renderTestBuilder();
+  notify("success", "Section added");
+}
+
+function addSelectedQuestionToBuilder(templateId) {
+  const template = templateById(templateId);
+  if (!template || template.status !== "Draft") return;
+  const questionId = document.querySelector("[data-builder-field='addQuestionId']")?.value;
+  const sectionId = document.querySelector("[data-builder-field='addSectionId']")?.value;
+  const question = centreState.questions.find((item) => item.id === questionId);
+  const section = centreState.testSections.find((item) => item.id === sectionId);
+  if (!question || !section) return;
+  const duplicate = centreState.testSections
+    .filter((item) => item.testTemplateId === templateId)
+    .some((item) => item.questionRefs.some((ref) => ref.questionId === questionId));
+  if (duplicate && !window.confirm("This question is already in this draft. Add it again?")) return;
+  section.questionRefs.push({ questionId: question.id, questionVersion: question.version, order: section.questionRefs.length + 1 });
+  normaliseSectionOrders(section);
+  template.updatedAt = new Date().toISOString();
+  persistCentreState();
+  renderCentreSystem();
+  notify("success", "Question added to draft test");
+}
+
+function moveQuestionWithinSection(sectionId, questionId, delta) {
+  const section = centreState.testSections.find((item) => item.id === sectionId);
+  const template = section ? templateById(section.testTemplateId) : null;
+  if (!section || template?.status !== "Draft") return;
+  const refs = section.questionRefs.sort((a, b) => a.order - b.order);
+  const index = refs.findIndex((ref) => ref.questionId === questionId);
+  const nextIndex = index + delta;
+  if (index < 0 || nextIndex < 0 || nextIndex >= refs.length) return;
+  [refs[index], refs[nextIndex]] = [refs[nextIndex], refs[index]];
+  section.questionRefs = refs;
+  normaliseSectionOrders(section);
+  persistCentreState();
+  renderTestBuilder();
+}
+
+function moveQuestionToSection(fromSectionId, toSectionId, questionId) {
+  if (fromSectionId === toSectionId) return;
+  const from = centreState.testSections.find((item) => item.id === fromSectionId);
+  const to = centreState.testSections.find((item) => item.id === toSectionId);
+  const template = from ? templateById(from.testTemplateId) : null;
+  if (!from || !to || template?.status !== "Draft") return;
+  const index = from.questionRefs.findIndex((ref) => ref.questionId === questionId);
+  if (index < 0) return;
+  const [ref] = from.questionRefs.splice(index, 1);
+  to.questionRefs.push({ ...ref, order: to.questionRefs.length + 1 });
+  normaliseSectionOrders(from);
+  normaliseSectionOrders(to);
+  persistCentreState();
+  renderTestBuilder();
+  notify("success", "Question moved between sections");
+}
+
+function removeQuestionFromSection(sectionId, questionId) {
+  const section = centreState.testSections.find((item) => item.id === sectionId);
+  const template = section ? templateById(section.testTemplateId) : null;
+  if (!section || template?.status !== "Draft") return;
+  section.questionRefs = section.questionRefs.filter((ref) => ref.questionId !== questionId);
+  normaliseSectionOrders(section);
+  persistCentreState();
+  renderCentreSystem();
+  notify("success", "Question removed from draft");
+}
+
+function normaliseSectionOrders(section) {
+  section.questionRefs = section.questionRefs.sort((a, b) => a.order - b.order).map((ref, index) => ({ ...ref, order: index + 1 }));
+}
+
+function previewStudentTest(templateId) {
+  const template = templateById(templateId);
+  const sections = centreState.testSections.filter((item) => item.testTemplateId === templateId).sort((a, b) => a.order - b.order);
+  const body = sections.map((section) => `
+    <h3>${escapeHtml(section.title)}</h3>
+    ${section.questionRefs.sort((a, b) => a.order - b.order).map((ref, index) => {
+      const question = centreState.questions.find((item) => item.id === ref.questionId && item.version === ref.questionVersion) || centreState.questions.find((item) => item.id === ref.questionId);
+      if (!question) return `<p>Missing question ${escapeHtml(ref.questionId)}</p>`;
+      return `<article class="preview-question">
+        <span class="step-label">Question ${index + 1}</span>
+        <p><strong>${escapeHtml(question.title)}</strong></p>
+        <p>${escapeHtml(question.questionContent.prompt)}</p>
+        ${studentPreviewAnswerMarkup(question)}
+      </article>`;
+    }).join("")}`).join("");
+  openStaffDrawer("Student Test Preview", template.name, body);
+}
+
+function studentPreviewAnswerMarkup(question) {
+  if (question.questionType === "MCQ") return `<ul>${question.options.map((option) => `<li>${escapeHtml(option.label)}. ${escapeHtml(option.content)}</li>`).join("")}</ul>`;
+  if (question.questionType === "TrueFalse") return "<p>True / False selection</p>";
+  if (question.questionType === "StructuredCalculation") return "<p>Working / Final answer / Unit fields</p>";
+  if (question.questionType === "ChemicalEquation") return "<p>Chemical equation input field</p>";
+  return "<p>Written answer box</p>";
+}
+
+function previewMarkScheme(templateId) {
+  const template = templateById(templateId);
+  const questionsForTemplate = getTemplateQuestions(centreState, templateId);
+  const body = questionsForTemplate.map((question) => `
+    <article class="preview-question">
+      <h3>${escapeHtml(question.id)} ${escapeHtml(question.title)}</h3>
+      <p><strong>Answer:</strong> ${escapeHtml(question.correctAnswer || "Staff reviewed")}</p>
+      <ul>${(question.markingPoints || []).map((point) => `<li>${escapeHtml(point.description)} (${point.markValue})</li>`).join("") || "<li>No written marking points.</li>"}</ul>
+    </article>`).join("");
+  openStaffDrawer("Preview Mark Scheme", template.name, body);
 }
 
 function renderSessionsModule() {
@@ -525,12 +1170,57 @@ function handleSessionAction(event) {
   if (action === "report") generateReportForSession(sessionId);
   if (action === "view-report") {
     const snapshot = centreState.reportSnapshots.find((item) => item.testSessionId === sessionId);
-    if (snapshot) renderEvidenceSnapshot(snapshot.evidenceJson, snapshot.editedNarrative || snapshot.generatedNarrative);
+    if (snapshot) openReportSnapshot(snapshot.id);
   }
+}
+
+function startSelectedTestWithDuplicateProtection() {
+  if (!selectedCentreStudentId || !selectedTestTemplateId) {
+    notify("warning", "Select one student and one published test first.");
+    return;
+  }
+  const existing = centreState.testSessions.find((session) =>
+    session.studentId === selectedCentreStudentId
+    && session.testTemplateId === selectedTestTemplateId
+    && session.status === "In progress"
+  );
+  if (existing) {
+    openStaffDrawer("Unfinished Session Already Exists", existing.testName, `
+      <p>An unfinished session already exists.</p>
+      <div class="submit-review-actions">
+        <button type="button" data-session-action="resume" data-session-id="${existing.id}">Resume Existing Session</button>
+        <button type="button" data-session-action="cancel" data-session-id="${existing.id}">Cancel Existing Session</button>
+        <button type="button" data-duplicate-start-new="${existing.id}">Start New Session</button>
+      </div>`);
+    document.querySelector("#staffDrawerBody [data-session-action='resume']")?.addEventListener("click", () => {
+      closeStaffDrawer();
+      openTestMode(existing.id);
+    });
+    document.querySelector("#staffDrawerBody [data-session-action='cancel']")?.addEventListener("click", () => {
+      closeStaffDrawer();
+      cancelSession(existing.id);
+    });
+    document.querySelector("#staffDrawerBody [data-duplicate-start-new]")?.addEventListener("click", () => {
+      if (!window.confirm("Start a new session while retaining the unfinished one?")) return;
+      closeStaffDrawer();
+      startNewSelectedSession();
+    });
+    return;
+  }
+  startNewSelectedSession();
+}
+
+function startNewSelectedSession() {
+  const session = createTestSession(centreState, selectedCentreStudentId, selectedTestTemplateId, new Date());
+  persistCentreState();
+  renderCentreSystem();
+  notify("success", "Session created");
+  openTestMode(session.id);
 }
 
 function createTestSession(state, studentId, testTemplateId, now) {
   const template = state.testTemplates.find((item) => item.id === testTemplateId);
+  const questionsForTemplate = getTemplateQuestions(state, testTemplateId);
   const startedAt = now.toISOString();
   const session = {
     id: makeId("SESSION"),
@@ -546,11 +1236,11 @@ function createTestSession(state, studentId, testTemplateId, now) {
     timeLimitMinutes: template.timeLimitMinutes,
     serverDeadline: new Date(now.getTime() + template.timeLimitMinutes * 60000).toISOString(),
     timeUsedSeconds: 0,
+    questionSnapshots: questionsForTemplate.map((question) => freezeQuestionSnapshot(question)),
     createdAt: startedAt,
     updatedAt: startedAt
   };
   state.testSessions.unshift(session);
-  const questionsForTemplate = getTemplateQuestions(state, testTemplateId);
   for (const question of questionsForTemplate) {
     state.studentResponses = upsertStudentResponse(state.studentResponses, {
       id: makeId("RESP"),
@@ -558,6 +1248,7 @@ function createTestSession(state, studentId, testTemplateId, now) {
       studentId,
       questionId: question.id,
       questionVersion: question.version,
+      questionSnapshot: freezeQuestionSnapshot(question),
       answer: emptyAnswerForQuestion(question),
       firstViewedAt: "",
       lastSavedAt: "",
@@ -588,6 +1279,8 @@ function openTestMode(sessionId) {
   document.querySelector("#completionScreen").hidden = true;
   document.querySelector(".test-mode-shell").hidden = false;
   document.querySelector("#testMode").hidden = false;
+  document.querySelector("#submitTest").disabled = false;
+  document.querySelector("#submitReviewDialog").hidden = true;
   renderTestMode();
   startTestTimer();
 }
@@ -600,6 +1293,26 @@ function closeTestMode(moduleName = "dashboard") {
   activeTestPayload = null;
   renderCentreSystem();
   showCentreModule(moduleName);
+}
+
+function bindReturnDeviceGuard() {
+  const button = document.querySelector("#returnToDashboard");
+  if (!button) return;
+  button.addEventListener("click", (event) => event.preventDefault());
+  button.addEventListener("pointerdown", () => {
+    button.textContent = "Hold for 3 seconds...";
+    returnGuardTimer = setTimeout(() => {
+      button.textContent = "Return to Centre Dashboard / 返回中心系統";
+      closeTestMode("dashboard");
+      notify("information", "Returned to centre dashboard after device guard hold");
+    }, 3000);
+  });
+  ["pointerup", "pointerleave", "pointercancel"].forEach((eventName) => {
+    button.addEventListener(eventName, () => {
+      clearTimeout(returnGuardTimer);
+      if (!document.querySelector("#testMode")?.hidden) button.textContent = "Return to Centre Dashboard / 返回中心系統";
+    });
+  });
 }
 
 function renderTestMode() {
@@ -640,6 +1353,20 @@ function renderCurrentQuestion() {
     <p class="muted-line">${question.maximumMark} mark${question.maximumMark === 1 ? "" : "s"}</p>`;
   document.querySelector("#testAnswerArea").innerHTML = answerInputMarkup(question, response);
   bindAnswerInputs(question);
+  updateTestControlState(response);
+}
+
+function updateTestControlState(response) {
+  const prev = document.querySelector("#prevQuestion");
+  const next = document.querySelector("#nextQuestion");
+  const flag = document.querySelector("#flagQuestion");
+  const isFirst = activeQuestionIndex === 0;
+  const isLast = activeQuestionIndex === activeTestPayload.questions.length - 1;
+  prev.disabled = isFirst;
+  prev.setAttribute("aria-disabled", String(isFirst));
+  next.disabled = isLast;
+  next.setAttribute("aria-disabled", String(isLast));
+  flag.textContent = response?.flagged ? "Question Flagged / 已標記" : "Flag Question / 標記題目";
 }
 
 function answerInputMarkup(question, response) {
@@ -653,6 +1380,9 @@ function answerInputMarkup(question, response) {
     const answer = typeof response.answer === "object" && response.answer ? response.answer : {};
     return `<label>Working<textarea data-answer-field="working" rows="5">${escapeHtml(answer.working || "")}</textarea></label><label>Final answer<input data-answer-field="finalAnswer" value="${escapeHtml(answer.finalAnswer || "")}" /></label><label>Unit<input data-answer-field="unit" value="${escapeHtml(answer.unit || "")}" /></label>`;
   }
+  if (question.questionType === "ChemicalEquation") {
+    return `<label>Chemical equation<input data-answer-field="equation" inputmode="text" autocomplete="off" placeholder="e.g. 2Cl- -> Cl2 + 2e-" value="${escapeHtml(typeof response.answer === "string" ? response.answer : response.answer?.equation || "")}" /></label>`;
+  }
   return `<label>Answer<textarea data-answer-field="text" rows="8">${escapeHtml(typeof response.answer === "string" ? response.answer : "")}</textarea></label>`;
 }
 
@@ -665,7 +1395,7 @@ function bindAnswerInputs(question) {
       const current = responseFor(activeSessionId, question.id).answer;
       const next = typeof current === "object" && current ? { ...current } : {};
       next[input.dataset.answerField] = input.value;
-      updateActiveAnswer(question.questionType === "ShortAnswer" ? next.text || "" : next);
+      updateActiveAnswer(question.questionType === "ShortAnswer" || question.questionType === "ChemicalEquation" ? next.text || next.equation || "" : next);
     });
   });
 }
@@ -726,16 +1456,69 @@ function submitActiveTest(autoSubmitted) {
   const session = sessionById(activeSessionId);
   if (!session || session.status !== "In progress") return;
   saveActiveResponseNow();
+  if (!autoSubmitted) {
+    showSubmitReviewDialog();
+    return;
+  }
+  finaliseActiveTestSubmission(true);
+}
+
+function showSubmitReviewDialog() {
+  const session = sessionById(activeSessionId);
+  if (!session) return;
   const responsesForSession = responsesBySession(session.id);
   const unanswered = responsesForSession.filter((response) => !isAnswered(response.answer)).length;
   const flagged = responsesForSession.filter((response) => response.flagged).length;
-  if (!autoSubmitted && !window.confirm(`Answered: ${responsesForSession.length - unanswered}\nUnanswered: ${unanswered}\nFlagged: ${flagged}\n\nSubmit this test?`)) return;
+  const remaining = recoverTimeRemaining(session, new Date());
+  document.querySelector("#submitReviewDialog").hidden = false;
+  document.querySelector("#submitReviewDialog").innerHTML = `
+    <h2>Review before submission</h2>
+    <div class="boundary-summary">
+      <div><span>Answered</span><strong>${responsesForSession.length - unanswered}</strong></div>
+      <div><span>Unanswered</span><strong>${unanswered}</strong></div>
+      <div><span>Flagged</span><strong>${flagged}</strong></div>
+      <div><span>Time remaining</span><strong>${formatRemaining(remaining)}</strong></div>
+    </div>
+    <div class="submit-review-actions">
+      ${responsesForSession.filter((response) => !isAnswered(response.answer) || response.flagged).slice(0, 12).map((response) => {
+        const index = activeTestPayload.questions.findIndex((question) => question.id === response.questionId);
+        return `<button type="button" data-review-jump="${index}">Q${index + 1}</button>`;
+      }).join("")}
+    </div>
+    <div class="submit-review-actions">
+      <button type="button" data-submit-review-action="return">Return to Test</button>
+      <button type="button" data-submit-review-action="confirm">Submit Test</button>
+    </div>`;
+}
+
+function handleSubmitReviewAction(event) {
+  const jump = event.target.closest("[data-review-jump]");
+  if (jump) {
+    activeQuestionIndex = Number(jump.dataset.reviewJump);
+    document.querySelector("#submitReviewDialog").hidden = true;
+    renderTestMode();
+    return;
+  }
+  const action = event.target.closest("[data-submit-review-action]")?.dataset.submitReviewAction;
+  if (action === "return") document.querySelector("#submitReviewDialog").hidden = true;
+  if (action === "confirm") finaliseActiveTestSubmission(false);
+}
+
+function finaliseActiveTestSubmission(autoSubmitted) {
+  const session = sessionById(activeSessionId);
+  if (!session || session.status !== "In progress") {
+    notify("warning", "This session has already been submitted.");
+    return;
+  }
+  document.querySelector("#submitTest").disabled = true;
+  document.querySelector("#submitReviewDialog").hidden = true;
   markSubmittedSession(centreState, session.id, new Date(), autoSubmitted);
   persistCentreState();
   clearInterval(testTimerInterval);
   document.querySelector(".test-mode-shell").hidden = true;
   document.querySelector("#completionScreen").hidden = false;
   renderCentreSystem();
+  notify("success", "Test submitted");
 }
 
 function cancelSession(sessionId) {
@@ -796,7 +1579,7 @@ function renderMarkingModule() {
     return;
   }
   const student = studentById(session.studentId);
-  const writtenResponses = responsesBySession(session.id).filter((response) => questionRequiresStaffReview(questionById(response.questionId)));
+  const writtenResponses = responsesBySession(session.id).filter((response) => questionRequiresStaffReview(questionForResponse(response)));
   const reviewed = writtenResponses.filter((response) => response.markingMethod === "Staff reviewed" || response.markingMethod === "Manual override").length;
   const unreviewed = writtenResponses.length - reviewed;
   panel.innerHTML = `
@@ -804,17 +1587,20 @@ function renderMarkingModule() {
       <h3>${escapeHtml(student.studentName)} — ${escapeHtml(session.testName)}</h3>
       <p>Submitted: ${escapeHtml(session.submittedAt ? formatDate(session.submittedAt) : "Not submitted")} · Objective marking: ${objectiveResponsesComplete(session.id) ? "Complete" : "Pending"} · Written marking: ${reviewed}/${writtenResponses.length} reviewed</p>
       <p>Provisional score: ${round1(session.rawMark || 0)}/${session.maximumMark || templateSummary(centreState, session.testTemplateId).maximumMark}</p>
+      ${unreviewed ? `<p class="difficulty-note"><strong>${unreviewed} written responses still require review.</strong> Complete them before generating the report.</p>` : ""}
       <div class="session-badges">
         <button type="button" data-marking-action="finish" data-session-id="${session.id}">Finish Marking</button>
-        <button type="button" data-marking-action="generate-report" data-session-id="${session.id}" ${unreviewed ? "disabled" : ""}>Generate Report / 生成報告</button>
+        <button type="button" data-marking-action="generate-report" data-session-id="${session.id}" ${unreviewed ? "disabled aria-disabled=\"true\" title=\"Complete written marking before generating the report.\"" : ""}>Generate Report / 生成報告</button>
       </div>
     </article>
     ${writtenResponses.map((response, index) => markingCard(session, response, index, writtenResponses.length)).join("") || "<p>No written responses require staff review.</p>"}`;
 }
 
 function markingCard(session, response, index, total) {
-  const question = questionById(response.questionId);
+  const question = questionForResponse(response);
   const suggestion = response.markingSuggestion || suggestWrittenResponse(question, response.answer);
+  const matched = suggestion.markingPoints.filter((point) => point.status === "Met").map((point) => point.id).join(", ") || "None";
+  const uncertain = suggestion.markingPoints.filter((point) => point.status !== "Met").map((point) => point.id).join(", ") || "None";
   return `<article class="marking-card" data-response-id="${response.id}">
     <span class="step-label">${index + 1} of ${total} written responses</span>
     <h3>${escapeHtml(question.title)}</h3>
@@ -822,7 +1608,13 @@ function markingCard(session, response, index, total) {
     <p><strong>Mark scheme:</strong> ${escapeHtml(question.markingPoints.map((point) => `${point.description} (${point.markValue})`).join("; "))}</p>
     <p><strong>Student answer:</strong> ${escapeHtml(displayAnswer(response.answer) || "No attempt")}</p>
     <p><strong>Suggested mark:</strong> ${suggestion.suggestedMark}/${suggestion.maximumMark} · Confidence ${(suggestion.confidence * 100).toFixed(0)}%</p>
+    <p><strong>Matched marking points:</strong> ${escapeHtml(matched)}</p>
+    <p><strong>Uncertain marking points:</strong> ${escapeHtml(uncertain)}</p>
     <label>Final mark<input type="number" min="0" max="${question.maximumMark}" step="0.5" data-mark-input="${response.id}" value="${response.markAwarded ?? suggestion.suggestedMark ?? 0}" /></label>
+    <fieldset class="error-code-fieldset">
+      <legend>Error codes</legend>
+      ${ERROR_CODES.filter(Boolean).map((code) => `<label><input type="checkbox" data-error-code-input="${response.id}" value="${escapeHtml(code)}" ${(response.errorCodes || suggestion.suggestedErrorCodes || []).includes(code) ? "checked" : ""} /> ${escapeHtml(code)}</label>`).join("")}
+    </fieldset>
     <label>Feedback<textarea rows="3" data-feedback-input="${response.id}">${escapeHtml(response.feedback || "")}</textarea></label>
     <div class="session-badges">
       <button type="button" data-marking-action="approve" data-response-id="${response.id}">Approve Suggestion</button>
@@ -834,12 +1626,17 @@ function markingCard(session, response, index, total) {
 function handleMarkInput(event) {
   const markInput = event.target.closest("[data-mark-input]");
   const feedbackInput = event.target.closest("[data-feedback-input]");
-  if (!markInput && !feedbackInput) return;
-  const responseId = markInput?.dataset.markInput || feedbackInput?.dataset.feedbackInput;
+  const errorInput = event.target.closest("[data-error-code-input]");
+  if (!markInput && !feedbackInput && !errorInput) return;
+  const responseId = markInput?.dataset.markInput || feedbackInput?.dataset.feedbackInput || errorInput?.dataset.errorCodeInput;
   const response = centreState.studentResponses.find((item) => item.id === responseId);
   if (!response) return;
   if (markInput) response.pendingMark = clamp(number(markInput.value) ?? 0, 0, response.maximumMark);
   if (feedbackInput) response.feedback = feedbackInput.value;
+  if (errorInput) {
+    const checked = [...document.querySelectorAll(`[data-error-code-input="${response.id}"]:checked`)].map((input) => input.value);
+    response.errorCodes = checked;
+  }
 }
 
 function handleMarkingAction(event) {
@@ -854,10 +1651,10 @@ function handleMarkingAction(event) {
 
 function approveWrittenResponse(responseId) {
   const response = centreState.studentResponses.find((item) => item.id === responseId);
-  const question = questionById(response.questionId);
+  const question = questionForResponse(response);
   const suggestion = response.markingSuggestion || suggestWrittenResponse(question, response.answer);
   response.markAwarded = suggestion.suggestedMark;
-  response.errorCodes = suggestion.suggestedErrorCodes;
+  response.errorCodes = response.errorCodes?.length ? response.errorCodes : suggestion.suggestedErrorCodes;
   response.markingMethod = "Staff reviewed";
   response.markingConfidence = suggestion.confidence;
   response.markedAt = new Date().toISOString();
@@ -865,6 +1662,8 @@ function approveWrittenResponse(responseId) {
   finishMarkingIfComplete(response.testSessionId);
   persistCentreState();
   renderMarkingModule();
+  scrollToNextUnreviewed(response.testSessionId);
+  notify("success", "Suggested mark approved");
 }
 
 function saveWrittenResponse(responseId) {
@@ -878,12 +1677,28 @@ function saveWrittenResponse(responseId) {
   finishMarkingIfComplete(response.testSessionId);
   persistCentreState();
   renderMarkingModule();
+  scrollToNextUnreviewed(response.testSessionId);
+  notify("success", "Saved");
 }
 
 function finishMarking(sessionId) {
-  finishMarkingIfComplete(sessionId, true);
+  const missing = responsesBySession(sessionId).filter((response) => response.markAwarded === null || response.markAwarded === undefined);
+  if (missing.length) {
+    openStaffDrawer("Marking is incomplete.", "", `
+      <p>${missing.length} written responses still require review.</p>
+      <div class="submit-review-actions">
+        <button type="button" data-incomplete-marking-action="continue">Continue Marking</button>
+        <button type="button" data-incomplete-marking-action="cancel">Cancel</button>
+      </div>`);
+    document.querySelector("[data-incomplete-marking-action='continue']")?.addEventListener("click", () => closeStaffDrawer());
+    document.querySelector("[data-incomplete-marking-action='cancel']")?.addEventListener("click", () => closeStaffDrawer());
+    notify("warning", `Marking is incomplete. ${missing.length} responses still require review.`);
+    return;
+  }
+  finishMarkingIfComplete(sessionId, false);
   persistCentreState();
   renderCentreSystem();
+  notify("success", "Marking finished");
 }
 
 function finishMarkingIfComplete(sessionId, force = false) {
@@ -896,15 +1711,23 @@ function finishMarkingIfComplete(sessionId, force = false) {
   updateSessionScore(centreState, sessionId);
 }
 
+function scrollToNextUnreviewed(sessionId) {
+  const next = responsesBySession(sessionId).find((response) => (response.markAwarded === null || response.markAwarded === undefined) && questionRequiresStaffReview(questionForResponse(response)));
+  const card = next ? document.querySelector(`[data-response-id="${next.id}"]`) : document.querySelector("#markingPanel");
+  card?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 function generateReportForSession(sessionId) {
   const unmarked = responsesBySession(sessionId).filter((response) => response.markAwarded === null || response.markAwarded === undefined);
   if (unmarked.length) {
-    alert("Complete written marking before generating the report.");
+    openStaffDrawer("Cannot Generate Report", "", `<p>${unmarked.length} written responses still require review. Complete them before generating the report.</p>`);
+    notify("warning", "Complete written marking before generating the report");
     return;
   }
   const snapshot = buildReportSnapshotFromState(centreState, sessionId, "Draft");
   const existingIndex = centreState.reportSnapshots.findIndex((item) => item.testSessionId === sessionId);
-  if (existingIndex >= 0) centreState.reportSnapshots[existingIndex] = snapshot;
+  if (existingIndex >= 0 && centreState.reportSnapshots[existingIndex].status === "Final" && !window.confirm("A final report already exists. Create a new draft version?")) return;
+  if (existingIndex >= 0 && centreState.reportSnapshots[existingIndex].status !== "Final") centreState.reportSnapshots[existingIndex] = snapshot;
   else centreState.reportSnapshots.unshift(snapshot);
   const session = sessionById(sessionId);
   session.status = "Report generated";
@@ -912,8 +1735,8 @@ function generateReportForSession(sessionId) {
   session.updatedAt = snapshot.createdAt;
   persistCentreState();
   renderCentreSystem();
-  renderEvidenceSnapshot(snapshot.evidenceJson, snapshot.generatedNarrative);
-  showCentreModule("reports");
+  openReportSnapshot(snapshot.id);
+  notify("success", "Report generated");
 }
 
 function buildReportSnapshotFromState(state, sessionId, status = "Draft") {
@@ -1012,7 +1835,7 @@ function centreSessionsToReportInputs(state, student, sessions) {
   return { assessments: assessmentsOut, questions: questionsOut, responses: responsesOut };
 }
 
-function renderEvidenceSnapshot(report, narrative) {
+function renderEvidenceSnapshot(report, narrative, snapshot = null) {
   evidence = report;
   document.querySelector("#pageTitle").textContent = `${report.student.name} - ${report.subject.name} Report`;
   renderSummary(report);
@@ -1026,6 +1849,74 @@ function renderEvidenceSnapshot(report, narrative) {
   renderErrorPatterns(report);
   renderDataQuality(report);
   elements.reportText.value = narrative || generateParentReport(report);
+  if (snapshot) {
+    activeReportSnapshotId = snapshot.id;
+    document.querySelector("#selectedReportMeta").innerHTML = `<span>Selected report</span><p>${escapeHtml(snapshot.subjectName)} · ${escapeHtml(snapshot.status)} · ${formatDate(snapshot.createdAt)} · ${escapeHtml(snapshot.id)}</p>`;
+  }
+}
+
+function openReportSnapshot(snapshotId) {
+  const snapshot = centreState.reportSnapshots.find((report) => report.id === snapshotId);
+  if (!snapshot) return;
+  showCentreModule("reports");
+  renderEvidenceSnapshot(snapshot.evidenceJson, snapshot.editedNarrative || snapshot.generatedNarrative, snapshot);
+  document.querySelector("#printableReport")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  notify("information", "Report opened");
+}
+
+function saveActiveReportDraft() {
+  const snapshot = centreState.reportSnapshots.find((report) => report.id === activeReportSnapshotId);
+  if (!snapshot) {
+    notify("warning", "Open a report snapshot before saving.");
+    return;
+  }
+  snapshot.editedNarrative = elements.reportText.value;
+  snapshot.status = snapshot.status === "Final" ? "Final" : "Draft";
+  snapshot.updatedAt = new Date().toISOString();
+  persistCentreState();
+  renderReportsModule();
+  notify("success", "Report draft saved");
+}
+
+function finaliseActiveReport() {
+  const snapshot = centreState.reportSnapshots.find((report) => report.id === activeReportSnapshotId);
+  if (!snapshot) {
+    notify("warning", "Open a report snapshot before finalising.");
+    return;
+  }
+  snapshot.editedNarrative = elements.reportText.value;
+  snapshot.status = "Final";
+  snapshot.updatedAt = new Date().toISOString();
+  persistCentreState();
+  renderReportsModule();
+  notify("success", "Report finalised");
+}
+
+function revertActiveReport() {
+  const snapshot = centreState.reportSnapshots.find((report) => report.id === activeReportSnapshotId);
+  if (!snapshot) {
+    notify("warning", "Open a report snapshot before reverting.");
+    return;
+  }
+  if (!window.confirm("Revert the visible narrative to the generated version?")) return;
+  snapshot.editedNarrative = "";
+  snapshot.updatedAt = new Date().toISOString();
+  elements.reportText.value = snapshot.generatedNarrative;
+  persistCentreState();
+  notify("success", "Report reverted to generated version");
+}
+
+function preserveActiveReportEdit() {
+  const snapshot = centreState?.reportSnapshots.find((report) => report.id === activeReportSnapshotId);
+  if (!snapshot) return;
+  snapshot.editedNarrative = elements.reportText.value;
+  snapshot.updatedAt = new Date().toISOString();
+  persistCentreState();
+}
+
+function exportPdfFallback() {
+  notify("information", "Use the browser print dialog and choose Save as PDF.");
+  window.print();
 }
 
 function markObjectiveResponse(question, answer) {
@@ -1116,18 +2007,17 @@ function buildTestModePayload(state, sessionId) {
   const student = state.students.find((item) => item.studentId === session.studentId);
   const template = state.testTemplates.find((item) => item.id === session.testTemplateId);
   const sections = state.testSections.filter((item) => item.testTemplateId === template.id).sort((a, b) => a.order - b.order);
-  const questionsForTest = sections.flatMap((section) => section.questionRefs.sort((a, b) => a.order - b.order).map((ref) => {
-    const question = state.questions.find((item) => item.id === ref.questionId && item.version === ref.questionVersion);
-    return {
-      id: question.id,
-      sectionTitle: section.title,
-      section: question.section,
-      title: question.title,
-      questionContent: question.questionContent,
-      questionType: question.questionType,
-      maximumMark: ref.markOverride ?? question.maximumMark,
-      options: question.options?.map((option) => ({ id: option.id, label: option.label, content: option.content })) || []
-    };
+  const sectionTitleByQuestion = new Map();
+  sections.forEach((section) => section.questionRefs.forEach((ref) => sectionTitleByQuestion.set(ref.questionId, section.title)));
+  const questionsForTest = getSessionQuestions(state, sessionId).map((question) => ({
+    id: question.id,
+    sectionTitle: question.sectionTitle || sectionTitleByQuestion.get(question.id) || question.section || "",
+    section: question.section,
+    title: question.title,
+    questionContent: question.questionContent,
+    questionType: question.questionType,
+    maximumMark: question.maximumMark,
+    options: question.options?.map((option) => ({ id: option.id, label: option.label, content: option.content })) || []
   }));
   return {
     sessionId,
@@ -1148,7 +2038,47 @@ function getTemplateQuestions(state, testTemplateId) {
 
 function getSessionQuestions(state, sessionId) {
   const session = state.testSessions.find((item) => item.id === sessionId);
-  return session ? getTemplateQuestions(state, session.testTemplateId) : [];
+  if (!session) return [];
+  if (Array.isArray(session.questionSnapshots) && session.questionSnapshots.length) {
+    return session.questionSnapshots.map((snapshot) => ({ ...snapshot, id: snapshot.questionId || snapshot.id }));
+  }
+  return getTemplateQuestions(state, session.testTemplateId);
+}
+
+function freezeQuestionsForTemplate(state, testTemplateId) {
+  return state.testSections
+    .filter((section) => section.testTemplateId === testTemplateId)
+    .sort((a, b) => a.order - b.order)
+    .flatMap((section) => section.questionRefs.sort((a, b) => a.order - b.order).map((ref) => {
+      const question = state.questions.find((item) => item.id === ref.questionId && item.version === ref.questionVersion);
+      return question ? freezeQuestionSnapshot(question, section.title, ref.markOverride) : null;
+    }).filter(Boolean));
+}
+
+function freezeQuestionSnapshot(question, sectionTitle = "", markOverride = null) {
+  return {
+    id: question.id,
+    questionId: question.id,
+    questionVersion: question.version,
+    title: question.title,
+    section: question.section,
+    sectionTitle,
+    questionContent: { ...(question.questionContent || {}) },
+    options: (question.options || []).map((option) => ({ ...option })),
+    maximumMark: markOverride ?? question.maximumMark,
+    topic: question.topic,
+    subtopic: question.subtopic,
+    difficulty: question.difficulty,
+    questionType: question.questionType,
+    markingPoints: (question.markingPoints || []).map((point) => ({ ...point, acceptedConcepts: [...(point.acceptedConcepts || [])] })),
+    correctAnswer: question.correctAnswer,
+    numericalTolerance: question.numericalTolerance ?? null,
+    requiredUnit: question.requiredUnit ?? "",
+    assessmentObjective: question.assessmentObjective,
+    coreOrSupplement: question.coreOrSupplement,
+    source: question.source,
+    version: question.version
+  };
 }
 
 function templateSummary(state, templateId) {
@@ -1171,11 +2101,14 @@ function validateTestTemplate(state, templateId) {
   const warnings = [];
   if (!sections.length) critical.push("No sections have been added");
   if (sections.some((section) => !section.questionRefs.length)) critical.push("One or more sections are empty");
-  if (questionsForTemplate.some((question) => !question.topic)) warnings.push("Some questions are missing topic");
+  if (questionsForTemplate.some((question) => !question.topic)) critical.push("Some questions are missing topic");
   if (questionsForTemplate.some((question) => !question.difficulty)) critical.push("Some questions are missing difficulty");
   if (questionsForTemplate.some((question) => question.maximumMark <= 0)) critical.push("Some questions have invalid maximum marks");
+  if (sum(questionsForTemplate.map((question) => question.maximumMark)) <= 0) critical.push("Test total is zero");
   if (new Set(questionsForTemplate.map((question) => question.id)).size !== questionsForTemplate.length) critical.push("Duplicate questions are present");
-  if (questionsForTemplate.some((question) => !questionRequiresStaffReview(question) && !question.correctAnswer && !question.options?.some((option) => option.isCorrect))) critical.push("Objective questions need a correct answer");
+  if (questionsForTemplate.some((question) => question.questionType === "MCQ" && !question.options?.some((option) => option.isCorrect))) critical.push("One or more MCQ questions have no correct option");
+  if (questionsForTemplate.some((question) => question.questionType === "TrueFalse" && normaliseTrueFalse(question.correctAnswer) === null)) critical.push("One or more True/False questions have no answer");
+  if (questionsForTemplate.some((question) => questionRequiresStaffReview(question) && !question.markingPoints?.length)) critical.push("One or more written questions have no marking points");
   return { critical, warnings };
 }
 
@@ -1211,12 +2144,12 @@ function isAnswered(answer) {
 }
 
 function questionRequiresStaffReview(question) {
-  return ["ShortAnswer", "LongApplication", "PracticalPlanning", "ChemicalEquation", "DataInterpretation", "GraphInterpretation"].includes(question.questionType);
+  return ["ShortAnswer", "StructuredCalculation", "LongApplication", "PracticalPlanning", "ChemicalEquation", "DataInterpretation", "GraphInterpretation"].includes(question.questionType);
 }
 
 function objectiveResponsesComplete(sessionId) {
   return responsesBySession(sessionId)
-    .filter((response) => !questionRequiresStaffReview(questionById(response.questionId)))
+    .filter((response) => !questionRequiresStaffReview(questionForResponse(response)))
     .every((response) => response.markingMethod === "Automatic");
 }
 
@@ -1227,10 +2160,10 @@ function reportQuestionType(type) {
     ShortAnswer: "Short explanation",
     StructuredCalculation: "Structured calculation",
     Numerical: "Structured calculation",
-    ChemicalEquation: "Structured calculation",
+    ChemicalEquation: "Chemical equation",
     DataInterpretation: "Data interpretation",
     GraphInterpretation: "Graph interpretation",
-    PracticalPlanning: "Experimental planning",
+    PracticalPlanning: "Practical knowledge",
     LongApplication: "Long application"
   }[type] || "Problem solving";
 }
@@ -1243,8 +2176,8 @@ function displayAnswer(answer) {
 
 function normaliseCentreErrorCode(value) {
   return {
-    "Calculation method": "Incorrect calculation method",
-    "Careless error": "Other"
+    "Calculation method": "Calculation method",
+    "Careless error": "Careless error"
   }[value] || value || "";
 }
 
@@ -1270,6 +2203,10 @@ function sessionById(sessionId) {
 
 function questionById(questionId) {
   return centreState.questions.find((item) => item.id === questionId);
+}
+
+function questionForResponse(response) {
+  return response?.questionSnapshot || getSessionQuestions(centreState, response.testSessionId).find((item) => item.id === response.questionId) || questionById(response.questionId);
 }
 
 function getUnfinishedSession(state) {
@@ -1301,42 +2238,54 @@ function makeId(prefix) {
 async function handleDataFile(event, target) {
   const file = event.target.files[0];
   if (!file) return;
-  const rows = await readTabularFile(file);
-  const lowerName = file.name.toLowerCase();
+  try {
+    const rows = await readTabularFile(file);
+    const lowerName = file.name.toLowerCase();
 
-  if (target === "assessments") {
-    const detected = detectLegacyRows(rows);
-    if (detected.length) {
-      legacyRows = detected;
-      const converted = convertLegacyRows(detected);
-      assessments = converted.assessments;
-      questions = converted.questions;
-      responses = converted.responses;
-      elements.assessmentFileStatus.textContent = `Legacy summary-only import: ${file.name}`;
-    } else {
-      assessments = rows.map(normaliseAssessment).filter(Boolean);
-      elements.assessmentFileStatus.textContent = `Loaded ${assessments.length} assessments from ${file.name}`;
+    if (target === "assessments") {
+      const detected = detectLegacyRows(rows);
+      if (detected.length) {
+        legacyRows = detected;
+        const converted = convertLegacyRows(detected);
+        assessments = converted.assessments;
+        questions = converted.questions;
+        responses = converted.responses;
+        elements.assessmentFileStatus.textContent = `Legacy summary-only import: ${file.name}`;
+        setLegacyImportStatus(`${detected.length} legacy rows were converted into summary-only report evidence. They do not create test sessions or question-bank attempts.`);
+      } else {
+        assessments = rows.map(normaliseAssessment).filter(Boolean);
+        elements.assessmentFileStatus.textContent = `Loaded ${assessments.length} assessments from ${file.name}`;
+        setLegacyImportStatus("Assessment details loaded for the report evidence panel. Use Centre Test Mode for canonical test sessions.");
+      }
     }
+    if (target === "questions") {
+      questions = rows.map(normaliseQuestion).filter(Boolean);
+      elements.blueprintFileStatus.textContent = `Loaded ${questions.length} blueprint questions from ${file.name}`;
+      setLegacyImportStatus("Question blueprint loaded for report evidence. This does not silently change the centre Question Bank.");
+    }
+    if (target === "responses") {
+      responses = rows.map(normaliseResponse).filter(Boolean);
+      elements.responsesFileStatus.textContent = `Loaded ${responses.length} responses from ${file.name}`;
+      setLegacyImportStatus("Marked responses loaded for report evidence. This is labelled separately from centre test sessions.");
+    }
+    if (!lowerName.endsWith(".csv") && typeof XLSX === "undefined") {
+      notify("warning", "XLSX support did not load. Use CSV or reload while online.");
+    }
+    renderSelectors();
+    render();
+    notify("success", `${file.name} imported`);
+  } catch (error) {
+    showStaffError("Import failed.", error);
+    notify("error", "Import failed. Use CSV or reload while online for XLSX.");
   }
-  if (target === "questions") {
-    questions = rows.map(normaliseQuestion).filter(Boolean);
-    elements.blueprintFileStatus.textContent = `Loaded ${questions.length} blueprint questions from ${file.name}`;
-  }
-  if (target === "responses") {
-    responses = rows.map(normaliseResponse).filter(Boolean);
-    elements.responsesFileStatus.textContent = `Loaded ${responses.length} responses from ${file.name}`;
-  }
-
-  if (!lowerName.endsWith(".csv") && typeof XLSX === "undefined") {
-    alert("XLSX parser did not load. Please try CSV or reload while online.");
-  }
-  renderSelectors();
-  render();
 }
 
 async function readTabularFile(file) {
   if (file.name.toLowerCase().endsWith(".csv")) {
     return parseCsv(await file.text());
+  }
+  if (typeof XLSX === "undefined") {
+    throw new Error("XLSX support did not load. Use CSV or reload while online.");
   }
   const buffer = await file.arrayBuffer();
   const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
@@ -1394,7 +2343,7 @@ function render() {
   const subject = elements.subjectSelect.value;
   if (!studentName || !subject) return;
 
-  evidence = buildStudentReportEvidence(assessments, questions, responses, { studentName, subject, reportDate: REPORT_DATE });
+  evidence = buildStudentReportEvidence(assessments, questions, responses, { studentName, subject, reportDate: new Date() });
   elements.qualificationSelect.value = evidence.subject.qualification || "IGCSE";
   document.querySelector("#pageTitle").textContent = `${evidence.student.name} - ${evidence.subject.name} Report`;
 
@@ -1436,6 +2385,7 @@ function renderSummary(report) {
 }
 
 function renderProgressChart(report) {
+  if (!chartIsAvailable("trendChart")) return;
   const labels = report.overallProgress.assessments.map((item) => formatDate(item.date));
   const scores = report.overallProgress.assessments.map((item) => Math.round(item.percentage));
   const forecast = report.forecastEvidence;
@@ -1519,6 +2469,7 @@ function renderPrintRadars(report) {
 
 function createRadarChart(canvas, profile, label) {
   if (!canvas) return null;
+  if (!chartIsAvailable(canvas.id)) return null;
   return new Chart(canvas, {
     type: "radar",
     data: {
@@ -1544,20 +2495,36 @@ function renderGradeEvidence(report) {
   document.querySelector("#curveDescription").textContent = report.gradeEvidence.message;
   curveChart?.destroy();
   const latest = report.latestAssessment;
-  curveChart = new Chart(document.querySelector("#curveChart"), {
-    type: "bar",
-    data: {
-      labels: report.overallProgress.assessments.map((item) => formatDate(item.date)),
-      datasets: [{ label: "Assessment %", data: report.overallProgress.assessments.map((item) => Math.round(item.percentage)), backgroundColor: "#1f78a8" }]
-    },
-    options: chartOptions({ y: { min: 0, max: 100, title: "Score %" }, x: { title: "Assessment date" } })
-  });
+  if (chartIsAvailable("curveChart")) {
+    curveChart = new Chart(document.querySelector("#curveChart"), {
+      type: "bar",
+      data: {
+        labels: report.overallProgress.assessments.map((item) => formatDate(item.date)),
+        datasets: [{ label: "Assessment %", data: report.overallProgress.assessments.map((item) => Math.round(item.percentage)), backgroundColor: "#1f78a8" }]
+      },
+      options: chartOptions({ y: { min: 0, max: 100, title: "Score %" }, x: { title: "Assessment date" } })
+    });
+  }
   container.innerHTML = latest
     ? `<div class="boundary-summary"><div><span>Latest mark</span><strong>${latest.markAwarded}/${latest.maximumMark}</strong></div><div><span>Completion</span><strong>${Math.round(latest.completionRate)}%</strong></div><div><span>Grade</span><strong>${escapeHtml(report.gradeEvidence.message)}</strong></div></div><p class="boundary-target">${escapeHtml(report.forecastEvidence.message)}</p>`
     : "";
   document.querySelector("#performanceAnnotations").innerHTML = report.strengths.slice(0, 1).concat(report.priorities.slice(0, 1)).map((item) =>
     `<div class="annotation-card"><span>${item.type}</span><strong>${escapeHtml(item.label)}</strong><p>${Math.round(item.mastery)}%, ${escapeHtml(item.confidence)}.</p></div>`
   ).join("");
+}
+
+function chartIsAvailable(canvasId) {
+  if (typeof Chart !== "undefined") return true;
+  const canvas = document.querySelector(`#${canvasId}`);
+  if (!canvas) return false;
+  const frame = canvas.closest(".chart-frame");
+  if (frame && !frame.querySelector(".chart-warning")) {
+    const warning = document.createElement("div");
+    warning.className = "chart-warning";
+    warning.textContent = "Chart unavailable. Table summaries remain available.";
+    frame.append(warning);
+  }
+  return false;
 }
 
 function renderTopicMap(report) {
@@ -2183,53 +3150,234 @@ function recommendationForError(errorCode) {
   }[errorCode] ?? "Review the marked response and practise similar question formats.";
 }
 
-function createChemistrySample(assessmentCount = 1) {
-  const topics = [
-    ["A1", "A", "1", 1, "B", "States of matter", "Gas particle arrangement and movement", "Easy", "MCQ"],
-    ["A2", "A", "2", 1, "B", "Electrochemistry", "Electrolysis products", "Easy", "MCQ"],
-    ["A3", "A", "3", 1, "C", "Acids, bases and salts", "Indicators and neutralisation", "Easy", "MCQ"],
-    ["A4", "A", "4", 1, "C", "Chemistry of the environment", "Air and water", "Easy", "MCQ"],
-    ["A5", "A", "5", 1, "B", "Atoms, elements and compounds", "Atomic structure", "Medium", "MCQ"],
-    ["A6", "A", "6", 1, "C", "Chemical energetics", "Energy changes", "Medium", "MCQ"],
-    ["A7", "A", "7", 1, "B", "The Periodic Table", "Group trends", "Medium", "MCQ"],
-    ["A8", "A", "8", 1, "B", "Organic chemistry", "Homologous series", "Medium", "MCQ"],
-    ["A9", "A", "9", 1, "B", "Stoichiometry", "Moles and reacting masses", "Hard", "MCQ"],
-    ["A10", "A", "10", 1, "B", "Chemical reactions", "Rates and reversible reactions", "Hard", "MCQ"],
-    ["A11", "A", "11", 1, "C", "Metals", "Extraction and reactivity", "Hard", "MCQ"],
-    ["A12", "A", "12", 1, "B", "Experimental techniques", "Separation and purification", "Hard", "MCQ"],
-    ["B1", "B", "1", 1, "True", "Stoichiometry", "Empirical formula", "Easy", "True / False"],
-    ["B2", "B", "2", 1, "False", "Chemical reactions", "Collision theory", "Easy", "True / False"],
-    ["B3", "B", "3", 1, "True", "Metals", "Metal reactions", "Easy", "True / False"],
-    ["B4", "B", "4", 1, "False", "Experimental techniques", "Chromatography", "Easy", "True / False"],
-    ["B5", "B", "5", 1, "True", "States of matter", "Diffusion", "Medium", "True / False"],
-    ["B6", "B", "6", 1, "True", "Electrochemistry", "Ionic conduction", "Medium", "True / False"],
-    ["B7", "B", "7", 1, "False", "Acids, bases and salts", "Salt preparation", "Medium", "True / False"],
-    ["B8", "B", "8", 1, "True", "Chemistry of the environment", "Pollutants", "Medium", "True / False"],
-    ["B9", "B", "9", 1, "True", "Atoms, elements and compounds", "Isotopes", "Hard", "True / False"],
-    ["B10", "B", "10", 1, "True", "Chemical energetics", "Bond energy", "Hard", "True / False"],
-    ["B11", "B", "11", 1, "True", "The Periodic Table", "Transition metals", "Hard", "True / False"],
-    ["B12", "B", "12", 1, "True", "Organic chemistry", "Addition reactions", "Hard", "True / False"]
+function chemistryTrialQuestions() {
+  const source = "IGCSE Chemistry Trial Test (Mixed Difficulty) question paper and mark scheme";
+  return [
+    mcq("A1", "1", "States of matter", "Gas particle arrangement and movement", "Easy", "Which best describes particles in a gas?", "B", [
+      ["A", "They vibrate about fixed positions.", "Misconception"],
+      ["B", "They are far apart and move randomly in all directions.", ""],
+      ["C", "They are close together in a regular pattern.", "Misconception"],
+      ["D", "They cannot move from place to place.", "Misconception"]
+    ], source),
+    mcq("A2", "2", "Electrochemistry", "Electrolysis ions", "Easy", "During electrolysis, positive ions move towards the:", "B", [
+      ["A", "anode", "Question interpretation"],
+      ["B", "cathode", ""],
+      ["C", "electrolyte", "Question interpretation"],
+      ["D", "power supply", "Question interpretation"]
+    ], source),
+    mcq("A3", "3", "Acids, bases and salts", "pH scale", "Easy", "A neutral solution has a pH of:", "C", [
+      ["A", "0", "Knowledge gap"],
+      ["B", "1", "Knowledge gap"],
+      ["C", "7", ""],
+      ["D", "14", "Knowledge gap"]
+    ], source),
+    mcq("A4", "4", "Chemistry of the environment", "Composition of air", "Easy", "What is the approximate percentage of clean dry air that is nitrogen?", "C", [
+      ["A", "21%", "Knowledge gap"],
+      ["B", "50%", "Knowledge gap"],
+      ["C", "78%", ""],
+      ["D", "90%", "Knowledge gap"]
+    ], source),
+    mcq("A5", "5", "Atoms, elements and compounds", "Giant covalent structures", "Medium", "Which substance has a giant covalent structure?", "B", [
+      ["A", "sodium chloride", "Misconception"],
+      ["B", "graphite", ""],
+      ["C", "carbon dioxide", "Misconception"],
+      ["D", "copper", "Misconception"]
+    ], source),
+    mcq("A6", "6", "Chemical energetics", "Enthalpy changes", "Medium", "A reaction has Delta H = -120 kJ/mol. What does this show?", "C", [
+      ["A", "Energy is absorbed overall.", "Misconception"],
+      ["B", "The products have more energy than the reactants.", "Misconception"],
+      ["C", "The reaction is exothermic.", ""],
+      ["D", "Bond breaking releases energy.", "Misconception"]
+    ], source),
+    mcq("A7", "7", "The Periodic Table", "Halogen displacement", "Medium", "Chlorine is bubbled into potassium bromide solution. What happens?", "B", [
+      ["A", "No reaction occurs.", "Knowledge gap"],
+      ["B", "Bromine is displaced.", ""],
+      ["C", "Chlorine is displaced.", "Misconception"],
+      ["D", "Potassium is displaced.", "Misconception"]
+    ], source),
+    mcq("A8", "8", "Organic chemistry", "Isomerism", "Medium", "Which compound is an isomer of butane, C4H10?", "B", [
+      ["A", "propane", "Knowledge gap"],
+      ["B", "methylpropane", ""],
+      ["C", "butene", "Knowledge gap"],
+      ["D", "butanol", "Knowledge gap"]
+    ], source),
+    mcq("A9", "9", "Stoichiometry", "Acid-base titration calculation", "Hard", "25.0 cm3 of 0.100 mol/dm3 NaOH is neutralised by 12.5 cm3 of H2SO4. Given 2NaOH + H2SO4 -> Na2SO4 + 2H2O, what is the concentration of the acid?", "B", [
+      ["A", "0.050 mol/dm3", "Calculation method"],
+      ["B", "0.100 mol/dm3", ""],
+      ["C", "0.200 mol/dm3", "Calculation method"],
+      ["D", "0.400 mol/dm3", "Calculation method"]
+    ], source),
+    mcq("A10", "10", "Chemical reactions", "Reversible reactions and equilibrium", "Hard", "For 2SO2 + O2 <=> 2SO3, the forward reaction is exothermic. What is the effect of increasing temperature?", "B", [
+      ["A", "The yield of SO3 increases.", "Misconception"],
+      ["B", "The yield of SO3 decreases.", ""],
+      ["C", "There is no effect on the equilibrium position.", "Misconception"],
+      ["D", "The reaction stops.", "Misconception"]
+    ], source),
+    mcq("A11", "11", "Metals", "Redox and displacement", "Hard", "For Fe + Cu2+ -> Fe2+ + Cu, which statement is correct?", "C", [
+      ["A", "Fe is reduced.", "Misconception"],
+      ["B", "Cu2+ is oxidised.", "Misconception"],
+      ["C", "Fe is the reducing agent.", ""],
+      ["D", "Cu2+ gains protons.", "Misconception"]
+    ], source),
+    mcq("A12", "12", "Experimental techniques", "Cation tests", "Hard", "Aqueous ammonia is added to a solution and a white precipitate forms that is insoluble in excess. Which cation is present?", "B", [
+      ["A", "Zn2+", "Practical method"],
+      ["B", "Al3+", ""],
+      ["C", "Cu2+", "Practical method"],
+      ["D", "Fe3+", "Practical method"]
+    ], source),
+    tfQuestion("B1", "1", "Stoichiometry", "The mole and Avogadro constant", "Easy", "One mole of any substance contains 6.02 x 10^23 particles.", true, "Avogadro constant", source),
+    tfQuestion("B2", "2", "Chemical reactions", "Catalysts", "Easy", "A catalyst is used up during a chemical reaction.", false, "Catalysts are not used up and remain chemically unchanged.", source),
+    tfQuestion("B3", "3", "Metals", "Rusting conditions", "Easy", "Iron rusts only when both water and oxygen are present.", true, "Rusting requires both water and oxygen.", source),
+    tfQuestion("B4", "4", "Experimental techniques", "Purity and melting point", "Easy", "A pure substance melts over a wide range of temperatures.", false, "A pure substance has a sharp, fixed melting point.", source),
+    tfQuestion("B5", "5", "States of matter", "Boiling and particle energy", "Medium", "The temperature of a pure liquid stays constant while it is boiling.", true, "Energy is used to overcome forces between particles.", source),
+    tfQuestion("B6", "6", "Electrochemistry", "Oxidation at electrodes", "Medium", "Oxidation takes place at the anode during electrolysis.", true, "Anions lose electrons at the anode.", source),
+    tfQuestion("B7", "7", "Acids, bases and salts", "Acid strength and concentration", "Medium", "A strong acid is always more concentrated than a weak acid.", false, "Strength describes dissociation, not concentration.", source),
+    tfQuestion("B8", "8", "Chemistry of the environment", "Greenhouse gases", "Medium", "Methane is a greenhouse gas.", true, "Methane absorbs and re-emits infrared radiation.", source),
+    tfQuestion("B9", "9", "Atoms, elements and compounds", "Diamond bonding", "Hard", "In diamond, each carbon atom forms four covalent bonds.", true, "Diamond has a rigid tetrahedral giant covalent structure.", source),
+    tfQuestion("B10", "10", "Chemical energetics", "Activation energy", "Hard", "Activation energy is the minimum energy that colliding particles must have to react.", true, "This is the definition of activation energy.", source),
+    tfQuestion("B11", "11", "The Periodic Table", "Transition elements", "Hard", "Transition elements form coloured compounds and can have variable oxidation states.", true, "These are characteristic transition element properties.", source),
+    tfQuestion("B12", "12", "Organic chemistry", "Condensation polymerisation", "Hard", "Condensation polymerisation releases a small molecule such as water at each linkage.", true, "Condensation reactions eliminate a small molecule.", source),
+    writtenQuestion("C1", "1", "Atoms, elements and compounds", "Isotopes", "Easy", "Definition / recall", "ShortAnswer", "State what is meant by isotopes.", [
+      mp("C1-MP1", "Same number of protons", ["same number of protons", "same proton number", "same atomic number"]),
+      mp("C1-MP2", "Different number of neutrons", ["different number of neutrons", "different neutron number"])
+    ], source),
+    writtenQuestion("C2", "2", "Chemical energetics", "Endothermic reactions", "Easy", "Definition / recall", "ShortAnswer", "What is meant by an endothermic reaction?", [
+      mp("C2-MP1", "Takes in thermal energy from the surroundings", ["takes in thermal energy", "absorbs heat", "takes in heat", "absorbs thermal energy"]),
+      mp("C2-MP2", "Temperature of the surroundings falls", ["temperature of surroundings falls", "surroundings get colder", "surroundings decrease in temperature"])
+    ], source),
+    writtenQuestion("C3", "3", "The Periodic Table", "Group I reactivity trend", "Easy", "Short answer", "ShortAnswer", "Describe the trend in reactivity of Group I metals down the group.", [
+      mp("C3-MP1", "Reactivity increases", ["reactivity increases", "more reactive", "increases in reactivity"]),
+      mp("C3-MP2", "Trend is down the group", ["down the group", "from lithium to potassium", "lithium to potassium and beyond"])
+    ], source),
+    writtenQuestion("C4", "4", "Organic chemistry", "Test for alkenes", "Easy", "Practical knowledge", "PracticalPlanning", "Describe a chemical test and positive result for an alkene.", [
+      mp("C4-MP1", "Add bromine water and shake", ["add bromine water", "bromine water", "shake with bromine water"]),
+      mp("C4-MP2", "Bromine water changes from orange to colourless", ["orange to colourless", "decolourises", "decolorises", "turns colourless"])
+    ], source),
+    writtenQuestion("C5", "5", "Stoichiometry", "Thermal decomposition calculation", "Medium", "Structured calculation", "StructuredCalculation", "Calcium carbonate decomposes when heated: CaCO3 -> CaO + CO2. Calculate the mass of CaO made from 50.0 g of CaCO3. Mr values: CaCO3 = 100, CaO = 56.", [
+      mp("C5-MP1", "Moles of CaCO3 = 50.0 / 100 = 0.50 mol, giving 0.50 mol CaO", ["50 / 100 = 0.5", "50.0 / 100 = 0.50", "0.5 mol", "0.50 mol"]),
+      mp("C5-MP2", "Mass of CaO = 0.50 x 56 = 28 g", ["0.5 x 56", "0.50 x 56", "28 g", "28g"])
+    ], source, { correctAnswer: "28 g", numericalTolerance: 0, requiredUnit: "g" }),
+    writtenQuestion("C6", "6", "Chemical reactions", "Rate of reaction and temperature", "Medium", "Short explanation", "ShortAnswer", "Explain why increasing temperature increases the rate of a reaction.", [
+      mp("C6-MP1", "Particles have more kinetic energy or collide more often", ["more kinetic energy", "collisions more frequent", "collide more often", "more frequent collisions"]),
+      mp("C6-MP2", "Greater proportion of particles have energy above activation energy", ["greater proportion above activation energy", "more particles have activation energy", "more particles above activation energy"])
+    ], source),
+    writtenQuestion("C7", "7", "Metals", "Sacrificial protection", "Medium", "Short explanation", "ShortAnswer", "Explain how sacrificial protection prevents iron from rusting.", [
+      mp("C7-MP1", "A more reactive metal such as zinc or magnesium is attached to iron", ["more reactive metal", "zinc attached", "magnesium attached", "zinc or magnesium"]),
+      mp("C7-MP2", "The more reactive metal loses electrons or corrodes instead of iron", ["loses electrons", "corrodes in preference", "reacts instead of iron", "oxidised instead of iron"])
+    ], source),
+    writtenQuestion("C8", "8", "Experimental techniques", "Copper(II) ion test", "Medium", "Practical knowledge", "PracticalPlanning", "Describe the test and positive result for Cu2+ ions using aqueous sodium hydroxide.", [
+      mp("C8-MP1", "Add aqueous sodium hydroxide", ["add sodium hydroxide", "aqueous sodium hydroxide", "add NaOH"]),
+      mp("C8-MP2", "Light blue precipitate forms and is insoluble in excess", ["light blue precipitate", "blue precipitate", "insoluble in excess"])
+    ], source),
+    writtenQuestion("C9", "9", "States of matter", "Melting and kinetic theory", "Hard", "Short explanation", "ShortAnswer", "Using kinetic theory, explain why the temperature stays constant while a pure substance is melting.", [
+      mp("C9-MP1", "Energy is used to overcome forces of attraction between particles", ["overcome forces of attraction", "overcome intermolecular forces", "break forces between particles"]),
+      mp("C9-MP2", "The energy does not increase the particles' kinetic energy", ["not increase kinetic energy", "kinetic energy stays constant", "temperature stays constant"])
+    ], source),
+    writtenQuestion("C10", "10", "Electrochemistry", "Anode half-equation in concentrated sodium chloride", "Hard", "Chemical equation", "ChemicalEquation", "Write the half-equation at the anode during electrolysis of concentrated aqueous sodium chloride.", [
+      mp("C10-MP1", "Correct species: chloride ions form chlorine and electrons", ["Cl- -> Cl2 + e-", "chloride ions form chlorine", "chloride to chlorine"]),
+      mp("C10-MP2", "Balanced atoms and charge: 2Cl- -> Cl2 + 2e-", ["2Cl- -> Cl2 + 2e-", "2cl- -> cl2 + 2e-", "2 chloride ions"])
+    ], source, { correctAnswer: "2Cl- -> Cl2 + 2e-" }),
+    writtenQuestion("C11", "11", "Acids, bases and salts", "Strong and weak acids", "Hard", "Short explanation", "ShortAnswer", "Explain why a dilute strong acid can have a lower pH than a concentrated weak acid.", [
+      mp("C11-MP1", "A strong acid dissociates completely, producing a high concentration of H+ ions", ["strong acid dissociates completely", "fully ionises", "high h+ concentration", "high hydrogen ion concentration"]),
+      mp("C11-MP2", "A weak acid only partially dissociates, so it produces fewer H+ ions", ["weak acid partially dissociates", "partially ionises", "far fewer h+", "fewer hydrogen ions"])
+    ], source),
+    writtenQuestion("C12", "12", "Chemistry of the environment", "Greenhouse effect", "Hard", "Short explanation", "ShortAnswer", "Explain how greenhouse gases contribute to global warming.", [
+      mp("C12-MP1", "Greenhouse gases absorb infrared or thermal radiation re-emitted by Earth", ["absorb infrared radiation", "absorb thermal radiation", "absorb IR", "radiation re-emitted by Earth"]),
+      mp("C12-MP2", "They re-emit radiation and trap more heat, raising average temperature", ["re-emit all directions", "trap more heat", "raises average temperature", "global temperature increases"])
+    ], source)
   ];
-  const sectionC = [
-    ["C1", "Atoms, elements and compounds", "Electronic structure", "Easy"],
-    ["C2", "Chemical energetics", "Exothermic and endothermic", "Easy"],
-    ["C3", "The Periodic Table", "Group I and VII", "Easy"],
-    ["C4", "Organic chemistry", "Alkanes and alkenes", "Easy"],
-    ["C5", "Stoichiometry", "Mole calculations", "Medium"],
-    ["C6", "Chemical reactions", "Reaction rate explanations", "Medium"],
-    ["C7", "Metals", "Extraction", "Medium"],
-    ["C8", "Experimental techniques", "Purity and separation", "Medium"],
-    ["C9", "States of matter", "Particle explanations", "Hard"],
-    ["C10", "Electrochemistry", "Electrolysis explanation", "Hard"],
-    ["C11", "Acids, bases and salts", "Salt preparation method", "Hard"],
-    ["C12", "Chemistry of the environment", "Greenhouse gases", "Hard"]
-  ].map(([id, topic, subtopic, difficulty], index) => [id, "C", String(index + 1), 2, "", topic, subtopic, difficulty, "Short explanation"]);
-  const questionRows = [...topics, ...sectionC];
+}
+
+function mcq(questionId, questionNumber, topic, subtopic, difficulty, prompt, correctAnswer, options, source) {
+  return {
+    questionId,
+    section: "A",
+    questionNumber,
+    title: `A${questionNumber} ${topic}`,
+    maximumMark: 1,
+    correctAnswer,
+    topic,
+    subtopic,
+    difficulty,
+    questionType: "MCQ",
+    centreQuestionType: "MCQ",
+    questionContent: { prompt },
+    options: options.map(([label, content, errorCode]) => ({
+      id: `${questionId}-${label}`,
+      label,
+      content,
+      isCorrect: normaliseAnswer(label) === normaliseAnswer(correctAnswer),
+      errorCode
+    })),
+    assessmentObjective: "",
+    markingPoints: [],
+    source
+  };
+}
+
+function tfQuestion(questionId, questionNumber, topic, subtopic, difficulty, prompt, correct, reason, source) {
+  const correctAnswer = correct ? "True" : "False";
+  return {
+    questionId,
+    section: "B",
+    questionNumber,
+    title: `B${questionNumber} ${topic}`,
+    maximumMark: 1,
+    correctAnswer,
+    topic,
+    subtopic,
+    difficulty,
+    questionType: "True / False",
+    centreQuestionType: "TrueFalse",
+    questionContent: { prompt },
+    options: ["True", "False"].map((label) => ({
+      id: `${questionId}-${label}`,
+      label,
+      content: label,
+      isCorrect: label === correctAnswer,
+      errorCode: label === correctAnswer ? "" : "Question interpretation"
+    })),
+    assessmentObjective: "",
+    markingPoints: [mp(`${questionId}-MS`, reason, [reason])],
+    source
+  };
+}
+
+function writtenQuestion(questionId, questionNumber, topic, subtopic, difficulty, questionType, centreQuestionType, prompt, markingPoints, source, extras = {}) {
+  return {
+    questionId,
+    section: "C",
+    questionNumber,
+    title: `C${questionNumber} ${topic}`,
+    maximumMark: 2,
+    correctAnswer: extras.correctAnswer || "",
+    topic,
+    subtopic,
+    difficulty,
+    questionType,
+    centreQuestionType,
+    questionContent: { prompt },
+    options: [],
+    acceptedAnswers: extras.correctAnswer ? [extras.correctAnswer] : [],
+    assessmentObjective: "",
+    markingPoints,
+    numericalTolerance: extras.numericalTolerance ?? null,
+    requiredUnit: extras.requiredUnit ?? "",
+    source
+  };
+}
+
+function mp(id, description, acceptedConcepts, markValue = 1) {
+  return { id, description, markValue, acceptedConcepts };
+}
+
+function createChemistrySample(assessmentCount = 1) {
+  const questionRows = chemistryTrialQuestions();
   const dates = ["2026-07-15", "2026-08-15", "2026-09-15", "2026-10-15"];
   const assessmentList = dates.slice(0, assessmentCount).map((date, index) => ({
     assessmentId: `CHEM-TRIAL-00${index + 1}`,
     studentId: "STU-001",
-    studentName: "Amelia Chan",
+    studentName: "Demo Student A",
     qualification: "IGCSE",
     examBoard: "Cambridge",
     syllabusCode: "0620",
@@ -2240,51 +3388,62 @@ function createChemistrySample(assessmentCount = 1) {
     maximumMark: 48,
     durationMinutes: 30
   }));
-  const questionList = assessmentList.flatMap((assessment) => questionRows.map((row) => makeQuestion(assessment.assessmentId, row)));
-  const responseList = assessmentList.flatMap((assessment, assessmentIndex) => questionRows.map((row, questionIndex) => makeResponse(assessment, row, assessmentIndex, questionIndex)));
+  const questionList = assessmentList.flatMap((assessment) => questionRows.map((question) => makeQuestion(assessment.assessmentId, question)));
+  const responseList = assessmentList.flatMap((assessment, assessmentIndex) => questionRows.map((question, questionIndex) => makeResponse(assessment, question, assessmentIndex, questionIndex)));
   return { assessments: assessmentList, questions: questionList, responses: responseList };
 }
 
-function makeQuestion(assessmentId, [questionId, section, questionNumber, maximumMark, correctAnswer, topic, subtopic, difficulty, questionType]) {
+function makeQuestion(assessmentId, sourceQuestion) {
   return {
     assessmentId,
-    questionId,
-    section,
-    questionNumber,
-    maximumMark,
-    correctAnswer,
-    topic,
-    subtopic,
-    difficulty,
-    questionType,
-    assessmentObjective: "",
-    answerMode: ["MCQ", "True / False"].includes(questionType) ? "exact" : "tutor-marked",
-    numericalTolerance: null,
-    requiredUnit: "",
+    ...sourceQuestion,
+    questionId: sourceQuestion.questionId,
+    maximumMark: sourceQuestion.maximumMark,
+    correctAnswer: sourceQuestion.correctAnswer,
+    topic: sourceQuestion.topic,
+    subtopic: sourceQuestion.subtopic,
+    difficulty: sourceQuestion.difficulty,
+    questionType: sourceQuestion.questionType,
+    answerMode: ["MCQ", "True / False"].includes(sourceQuestion.questionType) ? "exact" : sourceQuestion.centreQuestionType === "StructuredCalculation" ? "numeric" : "tutor-marked",
+    numericalTolerance: sourceQuestion.numericalTolerance ?? null,
+    requiredUnit: sourceQuestion.requiredUnit ?? "",
     coreOrSupplement: "Both"
   };
 }
 
-function makeResponse(assessment, row, assessmentIndex, questionIndex) {
-  const question = makeQuestion(assessment.assessmentId, row);
-  const topicPenalty = ["Stoichiometry", "Experimental techniques", "Acids, bases and salts"].includes(question.topic) ? 1 : 0;
-  const improvement = assessmentIndex * 0.28;
-  const base = question.maximumMark === 1
-    ? (questionIndex % 5 === 0 && assessmentIndex < 2 ? 0 : 1)
-    : Math.max(0, Math.min(2, Math.round(1 + improvement - topicPenalty * 0.35 + ((questionIndex + assessmentIndex) % 3 === 0 ? -0.5 : 0.3))));
-  const markAwarded = question.questionType === "Short explanation" ? base : (base > 0 ? 1 : 0);
-  const errorCode = markAwarded === question.maximumMark ? "" : ["Incomplete explanation", "Knowledge gap", "Unit error", "Calculation method"][questionIndex % 4];
+function makeResponse(assessment, question, assessmentIndex, questionIndex) {
+  const shouldMiss = questionIndex % 5 === 0 && assessmentIndex < 2;
+  const partialWritten = question.section === "C" && questionIndex % 3 === 0;
+  const markAwarded = shouldMiss ? 0 : question.section === "C" ? (partialWritten ? 1 : question.maximumMark) : question.maximumMark;
+  const studentAnswer = markAwarded === question.maximumMark
+    ? sampleCorrectAnswerForQuestion(question)
+    : markAwarded > 0
+      ? samplePartialAnswerForQuestion(question)
+      : "";
+  const errorCode = markAwarded === question.maximumMark ? "" : markAwarded === 0 && !studentAnswer ? "No attempt" : ["Incomplete explanation", "Knowledge gap", "Unit error", "Calculation method"][questionIndex % 4];
   return {
     assessmentId: assessment.assessmentId,
     studentId: assessment.studentId,
     questionId: question.questionId,
-    studentAnswer: markAwarded === question.maximumMark ? (question.correctAnswer || "Tutor marked response") : "Partial / incorrect",
+    studentAnswer,
     markAwarded,
     maximumMark: question.maximumMark,
-    markingMethod: question.questionType === "Short explanation" ? "tutor" : "automatic",
+    markingMethod: question.section === "C" ? "tutor" : "automatic",
     errorCode,
     tutorFeedback: errorCode ? recommendationForError(errorCode) : ""
   };
+}
+
+function sampleCorrectAnswerForQuestion(question) {
+  if (question.section === "A" || question.section === "B") return question.correctAnswer;
+  if (question.centreQuestionType === "StructuredCalculation") return "working: 50 / 100 = 0.5 mol; finalAnswer: 28; unit: g";
+  if (question.centreQuestionType === "ChemicalEquation") return "2Cl- -> Cl2 + 2e-";
+  return question.markingPoints.flatMap((point) => point.acceptedConcepts || [point.description])[0] + "; " + (question.markingPoints[1]?.acceptedConcepts?.[0] || question.markingPoints[1]?.description || "");
+}
+
+function samplePartialAnswerForQuestion(question) {
+  if (!question.markingPoints?.length) return "partial answer";
+  return question.markingPoints[0].acceptedConcepts?.[0] || question.markingPoints[0].description;
 }
 
 function normaliseAssessment(row) {
@@ -2447,7 +3606,7 @@ function normaliseErrorCode(value) {
 
 function downloadTemplates() {
   const files = [
-    ["assessment-template.csv", "assessmentId,studentId,studentName,qualification,examBoard,syllabusCode,subject,assessmentName,assessmentDate,assessmentType,maximumMark,durationMinutes\nCHEM-TRIAL-001,STU-001,Amelia Chan,IGCSE,Cambridge,0620,Chemistry,Chemistry Trial Test 1,2026-07-15,Baseline diagnostic,48,30"],
+    ["assessment-template.csv", "assessmentId,studentId,studentName,qualification,examBoard,syllabusCode,subject,assessmentName,assessmentDate,assessmentType,maximumMark,durationMinutes\nCHEM-TRIAL-001,STU-001,Demo Student A,IGCSE,Cambridge,0620,Chemistry,Chemistry Trial Test 1,2026-07-15,Baseline diagnostic,48,30"],
     ["question-blueprint-template.csv", "assessmentId,questionId,section,questionNumber,maximumMark,correctAnswer,topic,subtopic,difficulty,questionType,assessmentObjective,answerMode,numericalTolerance,requiredUnit,coreOrSupplement\nCHEM-TRIAL-001,A1,A,1,1,B,States of matter,Gas particle arrangement and movement,Easy,MCQ,,exact,,,Both"],
     ["student-responses-template.csv", "assessmentId,studentId,questionId,studentAnswer,markAwarded,maximumMark,markingMethod,errorCode,tutorFeedback\nCHEM-TRIAL-001,STU-001,A1,B,1,1,automatic,,"]
   ];
@@ -2573,6 +3732,18 @@ function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
+function mostCommon(values) {
+  if (!values.length) return "";
+  const counts = new Map();
+  values.forEach((value) => counts.set(value, (counts.get(value) || 0) + 1));
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+}
+
+function structuredCloneSafe(value) {
+  if (typeof structuredClone === "function") return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+
 function optionMarkup(value) {
   return `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`;
 }
@@ -2660,7 +3831,10 @@ const ReportCore = {
   confidenceFromCounts,
   calculateTrend,
   validateData,
+  validateCentreState,
+  migrateCentreState,
   createChemistrySample,
+  chemistryTrialQuestions,
   buildForecastEvidence,
   buildGradeEvidence,
   generateParentReport,
@@ -2674,6 +3848,8 @@ const ReportCore = {
   markObjectiveResponse,
   upsertStudentResponse,
   buildTestModePayload,
+  freezeQuestionSnapshot,
+  getSessionQuestions,
   recoverTimeRemaining,
   markSubmittedSession,
   updateSessionScore,
