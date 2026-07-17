@@ -224,10 +224,22 @@ button[aria-disabled="true"] {
   margin-top: 12px;
 }
 
-.actions button,
-.topbar-actions button {
+.sidebar .actions button {
   background: rgba(255, 255, 255, 0.12);
   border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+.topbar-actions button {
+  background: #fff;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.module-panel .actions button {
+  background: var(--blue);
+  color: #fff;
+  border: 1px solid var(--blue);
 }
 
 .filters {
@@ -290,12 +302,6 @@ h1 {
   display: flex;
   gap: 10px;
   flex-shrink: 0;
-}
-
-.topbar-actions button {
-  background: #fff;
-  color: var(--ink);
-  border-color: var(--line);
 }
 
 .summary-grid {
@@ -465,6 +471,10 @@ h1 {
   padding: 14px;
 }
 
+#module-startTest .workflow-card {
+  align-content: start;
+}
+
 .workflow-card h3,
 .question-card h3 {
   margin: 6px 0 10px;
@@ -573,6 +583,51 @@ h1 {
 
 .single-action {
   grid-template-columns: 1fr;
+}
+
+#module-startTest .single-action {
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+}
+
+#startTestSummary {
+  margin-bottom: 0;
+}
+
+#startSelectedTest {
+  display: block !important;
+  visibility: visible !important;
+  width: 100%;
+  min-height: 52px;
+  margin: 0;
+  padding: 0 18px;
+  border: 1px solid var(--blue) !important;
+  border-radius: 8px;
+  background: var(--blue) !important;
+  color: #fff !important;
+  opacity: 1;
+  font-size: 1rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+#startSelectedTest:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+#startSelectedTest:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.3);
+  outline-offset: 3px;
+}
+
+#startSelectedTest:disabled {
+  background: #d8dee8 !important;
+  border-color: #d8dee8 !important;
+  color: #667085 !important;
+  opacity: 1;
+  cursor: not-allowed;
+  filter: none;
 }
 
 .test-mode {

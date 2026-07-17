@@ -17,7 +17,7 @@ const buttonIssues = [...buttonTags(index), ...buttonTags(app)].filter((tag) => 
 assert.equal(buttonIssues.length, 0, `Buttons missing an intentional action: ${buttonIssues.join(", ")}`);
 assert.ok(index.includes("Centre-operated assessment system"));
 assert.ok(index.includes("Question Bank / 題目庫"));
-assert.ok(index.includes("?v=1.4.1"));
+assert.ok(index.includes("?v=1.4.2"));
 assert.ok(index.includes('<section id="printableReport" hidden>'));
 assert.ok(index.includes('id="reportModuleMount"'));
 assert.ok(app.includes("mountPrintableReport();"));

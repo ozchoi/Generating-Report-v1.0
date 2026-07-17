@@ -39,7 +39,7 @@ const DIFFICULTY_WEIGHTS = {
   "Exam-style": 1.4,
   Challenge: 1.5
 };
-const APP_VERSION = "1.4.1";
+const APP_VERSION = "1.4.2";
 const CENTRE_STORAGE_VERSION = 2;
 const CENTRE_STORAGE_KEY = "abilityReportCentreSystemV2";
 const OLD_CENTRE_STORAGE_KEY = "abilityReportCentreSystemV1";
@@ -653,6 +653,14 @@ function renderStartTestModule() {
       <div><span>Maximum marks</span><strong>${summary.maximumMark}</strong></div>
       <div><span>Time limit</span><strong>${template.timeLimitMinutes} min</strong></div>
     </div>` : "<p>Select one student and one published test.</p>";
+  const startButton = document.querySelector("#startSelectedTest");
+  if (startButton) {
+    const ready = Boolean(student && template);
+    startButton.hidden = false;
+    startButton.disabled = !ready;
+    startButton.setAttribute("aria-disabled", String(!ready));
+    startButton.textContent = ready ? "Start Test / 開始測驗" : "Select a student and test";
+  }
 }
 
 function renderQuestionFilters() {
