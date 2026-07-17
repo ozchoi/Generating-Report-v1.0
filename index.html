@@ -10,11 +10,11 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=20260716-centre-system" />
+    <link rel="stylesheet" href="./styles.css?v=1.4.0" />
   </head>
   <body>
     <main class="app-shell">
-      <aside class="sidebar">
+      <aside class="sidebar staff-only legacy-sidebar" aria-label="Legacy import controls">
         <div class="brand">
           <div class="brand-mark">AR</div>
           <div>
@@ -29,32 +29,22 @@
             <strong>Upload assessment details</strong>
             <small>CSV / XLSX with assessment ID, student, subject, date, maximum mark</small>
           </label>
-          <input id="assessmentFile" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
-          <p class="file-status" id="assessmentFileStatus">No assessment file selected</p>
 
           <label class="upload-box compact-upload" for="blueprintFile">
             <span class="upload-icon">+</span>
             <strong>Upload question blueprint</strong>
             <small>CSV / XLSX with question ID, marks, topic, difficulty, answer key</small>
           </label>
-          <input id="blueprintFile" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
-          <p class="file-status" id="blueprintFileStatus">No blueprint file selected</p>
 
           <label class="upload-box compact-upload" for="responsesFile">
             <span class="upload-icon">+</span>
             <strong>Upload marked student answers</strong>
             <small>CSV / XLSX with student answers, awarded marks, errors, feedback</small>
           </label>
-          <input id="responsesFile" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
-          <p class="file-status" id="responsesFileStatus">No response file selected</p>
 
           <div class="csv-columns">
             <strong>Legacy summary import</strong>
             <small>Old result-level CSV/XLSX is still accepted as summary-only evidence.</small>
-          </div>
-          <div class="actions">
-            <button id="loadSample" type="button">Use sample data</button>
-            <button id="downloadTemplate" type="button">Templates</button>
           </div>
         </section>
 
@@ -106,6 +96,8 @@
             <button type="button" data-module="sessions">Test Sessions / 測驗記錄</button>
             <button type="button" data-module="marking">Marking / 批改</button>
             <button type="button" data-module="reports">Student Reports / 學生報告</button>
+            <button type="button" data-module="import">Import Existing Results</button>
+            <button type="button" data-module="data">Data Management</button>
           </div>
 
           <article class="module-panel" id="module-dashboard">
@@ -212,10 +204,74 @@
                 <p>Report snapshots retain the evidence and generated narrative used at creation time.</p>
               </div>
             </div>
+            <div id="selectedReportMeta" class="difficulty-note"></div>
             <div id="reportSnapshotList" class="selection-list"></div>
+          </article>
+
+          <article class="module-panel" id="module-import" hidden>
+            <div class="panel-heading">
+              <div>
+                <h2>Import Existing Results</h2>
+                <p>Legacy upload data is imported as summary-only evidence or converted into centre records where possible.</p>
+              </div>
+            </div>
+            <div class="workflow-grid">
+              <div>
+                <label class="upload-box" for="assessmentFile">
+                  <span class="upload-icon">+</span>
+                  <strong>Upload assessment details</strong>
+                  <small>CSV / XLSX with assessment ID, student, subject, date, maximum mark</small>
+                </label>
+                <input id="assessmentFile" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
+                <p class="file-status" id="assessmentFileStatus">No assessment file selected</p>
+              </div>
+              <div>
+                <label class="upload-box" for="blueprintFile">
+                  <span class="upload-icon">+</span>
+                  <strong>Upload question blueprint</strong>
+                  <small>CSV / XLSX with question ID, marks, topic, difficulty, answer key</small>
+                </label>
+                <input id="blueprintFile" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
+                <p class="file-status" id="blueprintFileStatus">No blueprint file selected</p>
+              </div>
+              <div>
+                <label class="upload-box" for="responsesFile">
+                  <span class="upload-icon">+</span>
+                  <strong>Upload marked student answers</strong>
+                  <small>CSV / XLSX with student answers, awarded marks, errors, feedback</small>
+                </label>
+                <input id="responsesFile" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
+                <p class="file-status" id="responsesFileStatus">No response file selected</p>
+              </div>
+            </div>
+            <div id="legacyImportStatus" class="difficulty-note">
+              <span>Summary-only evidence</span>
+              <p>Imported files are labelled clearly and do not silently bypass the centre workflow.</p>
+            </div>
+            <div class="actions">
+              <button id="loadSample" type="button">Reset report sample</button>
+              <button id="downloadTemplate" type="button">Templates</button>
+            </div>
+          </article>
+
+          <article class="module-panel" id="module-data" hidden>
+            <div class="panel-heading">
+              <div>
+                <h2>Data Management</h2>
+                <p>Prototype data is stored only in this browser on this device. Do not enter real confidential student information into the public demo.</p>
+              </div>
+            </div>
+            <div class="quick-actions">
+              <button id="exportLocalBackup" type="button">Export Local Backup</button>
+              <label class="button-like" for="importLocalBackup">Import Local Backup</label>
+              <button id="resetDemoData" type="button">Reset Demo Data</button>
+            </div>
+            <input id="importLocalBackup" type="file" accept="application/json,.json" hidden />
+            <div id="dataManagementStatus" class="difficulty-note"></div>
           </article>
         </section>
 
+        <section id="printableReport">
         <section class="summary-grid" aria-label="student summary">
           <article>
             <span>Latest Assessment</span>
@@ -368,14 +424,37 @@
                 <p>Editable narrative based on the uploaded results.</p>
               </div>
             </div>
+            <div class="report-actions staff-only">
+              <button id="saveReportDraft" type="button">Save Draft</button>
+              <button id="finaliseReport" type="button">Finalise Report</button>
+              <button id="revertReport" type="button">Revert to Generated Version</button>
+              <button id="printReportInline" type="button">Print Report</button>
+              <button id="exportPdf" type="button">Export PDF</button>
+              <button id="exportReportInline" type="button">Export Text</button>
+            </div>
             <textarea id="reportText" spellcheck="true"></textarea>
           </article>
+        </section>
         </section>
       </section>
     </main>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <div id="toastRegion" class="toast-region staff-only" aria-live="polite"></div>
+    <div id="staffErrorPanel" class="staff-error-panel staff-only" hidden></div>
+    <div id="staffDrawer" class="staff-drawer staff-only" hidden>
+      <div class="staff-drawer-panel" role="dialog" aria-modal="true" aria-labelledby="staffDrawerTitle">
+        <div class="panel-heading">
+          <div>
+            <h2 id="staffDrawerTitle">Preview</h2>
+            <p id="staffDrawerSubtitle"></p>
+          </div>
+          <button id="closeStaffDrawer" type="button">Close</button>
+        </div>
+        <div id="staffDrawerBody"></div>
+      </div>
+    </div>
     <section id="testMode" class="test-mode" hidden>
       <div class="test-mode-shell">
         <header class="test-mode-header">
@@ -404,14 +483,17 @@
             </div>
           </section>
         </main>
+        <div id="submitReviewDialog" class="submit-review" role="dialog" aria-modal="true" hidden></div>
       </div>
       <div id="completionScreen" class="completion-screen" hidden>
         <h2>Test submitted successfully</h2>
         <p>Your answers have been saved. Please return the device to the centre staff.</p>
+        <p class="muted-line">Device guard only - not secure authentication. Hold the button for three seconds to return.</p>
         <button id="returnToDashboard" type="button">Return to Centre Dashboard / 返回中心系統</button>
       </div>
     </section>
 
-    <script src="./app.js?v=20260716-centre-system"></script>
+    <footer class="version-footer staff-only" id="versionFooter">App version: v1.4.0 · Deployment: local · Deployed: unknown · Storage schema: v2</footer>
+    <script src="./app.js?v=1.4.0"></script>
   </body>
 </html>
