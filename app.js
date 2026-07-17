@@ -39,7 +39,7 @@ const DIFFICULTY_WEIGHTS = {
   "Exam-style": 1.4,
   Challenge: 1.5
 };
-const APP_VERSION = "1.4.0";
+const APP_VERSION = "1.4.1";
 const CENTRE_STORAGE_VERSION = 2;
 const CENTRE_STORAGE_KEY = "abilityReportCentreSystemV2";
 const OLD_CENTRE_STORAGE_KEY = "abilityReportCentreSystemV1";
@@ -82,6 +82,7 @@ const elements = hasDom ? {
 
 if (hasDom) {
   installGlobalErrorHandlers();
+  mountPrintableReport();
   document.querySelector("#loadSample")?.addEventListener("click", () => {
     loadSampleData();
     renderSelectors();
@@ -574,8 +575,32 @@ function showCentreModule(moduleName) {
   document.querySelectorAll("[data-module]").forEach((button) => {
     button.classList.toggle("active", button.dataset.module === moduleName);
   });
+  const printableReport = document.querySelector("#printableReport");
+  if (printableReport) {
+    printableReport.hidden = moduleName !== "reports";
+  }
   if (moduleName === "marking") renderMarkingModule();
-  if (moduleName === "reports") renderReportsModule();
+  if (moduleName === "reports") {
+    renderReportsModule();
+    resizeReportCharts();
+  }
+}
+
+function mountPrintableReport() {
+  const mount = document.querySelector("#reportModuleMount");
+  const printableReport = document.querySelector("#printableReport");
+  if (mount && printableReport && printableReport.parentElement !== mount) {
+    mount.append(printableReport);
+  }
+}
+
+function resizeReportCharts() {
+  if (typeof requestAnimationFrame === "undefined") return;
+  requestAnimationFrame(() => {
+    [trendChart, radarChart, curveChart, printTopicRadarChart, printQuestionRadarChart].forEach((chart) => {
+      chart?.resize?.();
+    });
+  });
 }
 
 function renderDashboardModule() {
