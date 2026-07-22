@@ -355,7 +355,7 @@ test("static source exposes repaired controls and optional dependency fallbacks"
   assert.ok(app.includes("typeof XLSX"));
   assert.ok(html.includes("Centre-operated assessment system"));
   assert.ok(html.includes("Question Bank / 題目庫"));
-  assert.ok(html.includes("?v=1.4.2"));
+  assert.ok(html.includes("?v=1.4.3"));
   assert.ok(html.includes('<section id="printableReport" hidden>'));
   assert.ok(html.includes('id="reportModuleMount"'));
   assert.ok(app.includes("mountPrintableReport();"));

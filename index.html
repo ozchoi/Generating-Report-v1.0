@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=1.4.2" />
+    <link rel="stylesheet" href="./styles.css?v=1.4.3" />
   </head>
   <body>
     <main class="app-shell">
@@ -490,11 +490,12 @@
         <h2>Test submitted successfully</h2>
         <p>Your answers have been saved. Please return the device to the centre staff.</p>
         <p class="muted-line">Device guard only - not secure authentication. Hold the button for three seconds to return.</p>
-        <button id="returnToDashboard" type="button">Return to Centre Dashboard / 返回中心系統</button>
+        <p id="completionGuardStatus" class="guard-status" role="status" aria-live="polite">Press and hold until the dashboard opens.</p>
+        <button id="returnToDashboard" type="button" aria-describedby="completionGuardStatus">Return to Centre Dashboard / 返回中心系統</button>
       </div>
     </section>
 
-    <footer class="version-footer staff-only" id="versionFooter">App version: v1.4.2 · Deployment: local · Deployed: unknown · Storage schema: v2</footer>
-    <script src="./app.js?v=1.4.2"></script>
+    <footer class="version-footer staff-only" id="versionFooter">App version: v1.4.3 · Deployment: local · Deployed: unknown · Storage schema: v2</footer>
+    <script src="./app.js?v=1.4.3"></script>
   </body>
 </html>

@@ -1,10 +1,10 @@
-# QA Checklist v1.4.2
+# QA Checklist v1.4.3
 
 Use the static site through an HTTP server. Do not open `index.html` directly for final QA.
 
 ## Fresh Browser
 
-- Confirm footer shows `App version: v1.4.2`, storage schema v2, and deployment metadata when available.
+- Confirm footer shows `App version: v1.4.3`, storage schema v2, and deployment metadata when available.
 - Confirm privacy warning appears in Data Management.
 - Confirm centre workflow is the primary interface and legacy import sidebar is hidden.
 - Complete workflow: select demo student -> select Chemistry test -> start Test Mode -> answer questions -> submit -> mark written answers -> generate report -> save edited report -> print.
@@ -74,7 +74,7 @@ Use the static site through an HTTP server. Do not open `index.html` directly fo
 
 - Confirm `deployment.json` loads.
 - Confirm footer SHA matches the latest deployed commit.
-- Confirm CSS and JS use `?v=1.4.2`.
+- Confirm CSS and JS use `?v=1.4.3`.
 
 ## Button Inventory
 

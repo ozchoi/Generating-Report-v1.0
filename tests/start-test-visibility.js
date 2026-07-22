@@ -13,6 +13,7 @@ try {
 }
 
 const root = path.join(__dirname, "..");
+const RETURN_GUARD_DURATION_MS = 3000;
 const contentTypes = {
   ".css": "text/css",
   ".html": "text/html",
@@ -40,7 +41,7 @@ function createServer() {
 
     if (relativePath === "deployment.json") {
       response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ version: "1.4.2", sha: "test", deployedAt: "test" }));
+      response.end(JSON.stringify({ version: "1.4.3", sha: "test", deployedAt: "test" }));
       return;
     }
 
@@ -138,8 +139,25 @@ function createServer() {
     await page.click("#startSelectedTest");
     await page.waitForFunction(() => window.__startSelectedTestCallCount === 1);
     await page.waitForFunction(() => document.querySelector("#testMode")?.hidden === false);
+
+    await page.evaluate(() => finaliseActiveTestSubmission(false));
+    await page.waitForFunction(() => document.querySelector("#completionScreen")?.hidden === false);
+
+    await page.click("#returnToDashboard");
+    await page.waitForFunction(() => document.querySelector("#completionGuardStatus")?.textContent.includes("Please hold"));
+    assert.equal(await page.$eval("#testMode", (testMode) => testMode.hidden), false);
+
+    const returnButtonBox = await page.locator("#returnToDashboard").boundingBox();
+    assert.ok(returnButtonBox, "Expected return button to have a rendered bounding box");
+    await page.mouse.move(returnButtonBox.x + returnButtonBox.width / 2, returnButtonBox.y + returnButtonBox.height / 2);
+    await page.mouse.down();
+    await page.waitForFunction(() => document.querySelector("#completionGuardStatus")?.textContent.includes("Keep holding"));
+    await page.waitForTimeout(RETURN_GUARD_DURATION_MS + 250);
+    await page.mouse.up();
+    await page.waitForFunction(() => document.querySelector("#testMode")?.hidden === true);
+    await page.waitForFunction(() => document.querySelector("#module-dashboard")?.hidden === false);
     assert.deepEqual(consoleErrors, []);
-    console.log("PASS rendered Start Test button visibility and click path");
+    console.log("PASS rendered Start Test button visibility, submission completion, and guarded dashboard return");
   } finally {
     await browser.close();
     await new Promise((resolve) => server.close(resolve));

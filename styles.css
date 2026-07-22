@@ -755,6 +755,27 @@ h1 {
   text-align: center;
 }
 
+.guard-status {
+  min-height: 24px;
+  margin: 10px 0 14px;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.completion-screen #returnToDashboard {
+  display: block;
+  width: min(100%, 460px);
+  min-height: 56px;
+  margin: 0 auto;
+  touch-action: none;
+  user-select: none;
+}
+
+.completion-screen #returnToDashboard.is-holding {
+  background: #174ea6;
+  border-color: #174ea6;
+}
+
 .report-actions {
   display: flex;
   flex-wrap: wrap;

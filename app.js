@@ -39,10 +39,11 @@ const DIFFICULTY_WEIGHTS = {
   "Exam-style": 1.4,
   Challenge: 1.5
 };
-const APP_VERSION = "1.4.2";
+const APP_VERSION = "1.4.3";
 const CENTRE_STORAGE_VERSION = 2;
 const CENTRE_STORAGE_KEY = "abilityReportCentreSystemV2";
 const OLD_CENTRE_STORAGE_KEY = "abilityReportCentreSystemV1";
+const RETURN_GUARD_DURATION_MS = 3000;
 
 let assessments = [];
 let questions = [];
@@ -1323,6 +1324,8 @@ function closeTestMode(moduleName = "dashboard") {
   document.querySelector(".test-mode-shell").hidden = false;
   document.querySelector("#completionScreen").hidden = true;
   clearInterval(testTimerInterval);
+  clearTimeout(returnGuardTimer);
+  returnGuardTimer = null;
   activeTestPayload = null;
   renderCentreSystem();
   showCentreModule(moduleName);
@@ -1331,20 +1334,62 @@ function closeTestMode(moduleName = "dashboard") {
 function bindReturnDeviceGuard() {
   const button = document.querySelector("#returnToDashboard");
   if (!button) return;
-  button.addEventListener("click", (event) => event.preventDefault());
-  button.addEventListener("pointerdown", () => {
+  const status = document.querySelector("#completionGuardStatus");
+  const resetGuardText = () => {
+    button.classList.remove("is-holding");
+    button.textContent = "Return to Centre Dashboard / 返回中心系統";
+    if (status) status.textContent = "Press and hold until the dashboard opens.";
+  };
+  const finishReturnGuard = () => {
+    returnGuardTimer = null;
+    resetGuardText();
+    closeTestMode("dashboard");
+    notify("information", "Returned to centre dashboard after device guard hold");
+  };
+  const startReturnGuard = (event) => {
+    if (document.querySelector("#testMode")?.hidden) return;
+    event?.preventDefault();
+    if (returnGuardTimer) return;
+    if (event?.pointerId != null && button.setPointerCapture) {
+      try {
+        button.setPointerCapture(event.pointerId);
+      } catch (error) {
+        console.debug("Pointer capture unavailable for return guard", error);
+      }
+    }
+    button.classList.add("is-holding");
     button.textContent = "Hold for 3 seconds...";
-    returnGuardTimer = setTimeout(() => {
-      button.textContent = "Return to Centre Dashboard / 返回中心系統";
-      closeTestMode("dashboard");
-      notify("information", "Returned to centre dashboard after device guard hold");
-    }, 3000);
+    if (status) status.textContent = "Keep holding. The dashboard will open in three seconds.";
+    returnGuardTimer = setTimeout(finishReturnGuard, RETURN_GUARD_DURATION_MS);
+  };
+  const cancelReturnGuard = (event) => {
+    if (!returnGuardTimer) return;
+    if (event?.pointerId != null && button.releasePointerCapture) {
+      try {
+        button.releasePointerCapture(event.pointerId);
+      } catch (error) {
+        console.debug("Pointer release unavailable for return guard", error);
+      }
+    }
+    clearTimeout(returnGuardTimer);
+    returnGuardTimer = null;
+    resetGuardText();
+  };
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (!document.querySelector("#testMode")?.hidden && !returnGuardTimer) {
+      if (status) status.textContent = "Please hold the button for three seconds to return.";
+      notify("information", "Hold the return button for three seconds.");
+    }
   });
-  ["pointerup", "pointerleave", "pointercancel"].forEach((eventName) => {
-    button.addEventListener(eventName, () => {
-      clearTimeout(returnGuardTimer);
-      if (!document.querySelector("#testMode")?.hidden) button.textContent = "Return to Centre Dashboard / 返回中心系統";
-    });
+  button.addEventListener("pointerdown", startReturnGuard);
+  button.addEventListener("pointerup", cancelReturnGuard);
+  button.addEventListener("pointercancel", cancelReturnGuard);
+  button.addEventListener("keydown", (event) => {
+    if (event.key === " " || event.key === "Enter") startReturnGuard(event);
+  });
+  button.addEventListener("keyup", (event) => {
+    if (event.key === " " || event.key === "Enter") cancelReturnGuard(event);
   });
 }
 
@@ -1550,6 +1595,11 @@ function finaliseActiveTestSubmission(autoSubmitted) {
   clearInterval(testTimerInterval);
   document.querySelector(".test-mode-shell").hidden = true;
   document.querySelector("#completionScreen").hidden = false;
+  document.querySelector("#returnToDashboard")?.classList.remove("is-holding");
+  const guardStatus = document.querySelector("#completionGuardStatus");
+  if (guardStatus) guardStatus.textContent = "Press and hold until the dashboard opens.";
+  const returnButton = document.querySelector("#returnToDashboard");
+  if (returnButton) returnButton.textContent = "Return to Centre Dashboard / 返回中心系統";
   renderCentreSystem();
   notify("success", "Test submitted");
 }
