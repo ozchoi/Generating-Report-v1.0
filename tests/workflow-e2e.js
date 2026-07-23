@@ -7,7 +7,7 @@ let chromium;
 try {
   ({ chromium } = require("playwright"));
 } catch (error) {
-  console.error("Playwright is required for the v1.5.0 workflow test.");
+  console.error("Playwright is required for the v1.5.1 workflow test.");
   console.error("Set NODE_PATH to the bundled runtime node_modules or install Playwright before running this test.");
   process.exit(1);
 }
@@ -27,7 +27,7 @@ function createServer() {
     const relativePath = requestUrl.pathname === "/" ? "index.html" : requestUrl.pathname.slice(1);
     if (relativePath === "deployment.json") {
       response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ version: "1.5.0", sha: "test", deployedAt: "test" }));
+      response.end(JSON.stringify({ version: "1.5.1", sha: "test", deployedAt: "test" }));
       return;
     }
     if (relativePath === "favicon.ico") {
@@ -68,6 +68,52 @@ function clearLocalStorageOnce() {
   sessionStorage.setItem("__workflowE2eInitialised", "true");
 }
 
+function installChartStub() {
+  if (window.Chart) return;
+  window.Chart = class {
+    constructor(target, config) {
+      this.canvas = target?.canvas || target;
+      this.ctx = this.canvas?.getContext?.("2d") || null;
+      this.config = { type: config.type };
+      this.data = config.data || {};
+      this.options = config.options || {};
+      this._destroyed = false;
+      this.draw();
+    }
+
+    draw() {
+      if (!this.canvas || !this.ctx || this._destroyed) return;
+      const rect = this.canvas.getBoundingClientRect();
+      this.canvas.width = Math.max(640, Math.round(rect.width || this.canvas.width || 640));
+      this.canvas.height = Math.max(320, Math.round(rect.height || this.canvas.height || 360));
+      this.ctx.fillStyle = "#ffffff";
+      this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+      this.ctx.strokeStyle = "#2563eb";
+      this.ctx.lineWidth = 6;
+      this.ctx.beginPath();
+      this.ctx.moveTo(32, this.canvas.height - 42);
+      this.ctx.lineTo(this.canvas.width * 0.45, this.canvas.height * 0.42);
+      this.ctx.lineTo(this.canvas.width - 36, 44);
+      this.ctx.stroke();
+      this.ctx.fillStyle = "#17202a";
+      this.ctx.font = "24px sans-serif";
+      this.ctx.fillText(this.data.datasets?.[0]?.label || "Report chart", 32, 42);
+    }
+
+    resize() {
+      this.draw();
+    }
+
+    update() {
+      this.draw();
+    }
+
+    destroy() {
+      this._destroyed = true;
+    }
+  };
+}
+
 async function prepareAssessment(page) {
   await page.click('[data-module="startTest"]');
   await page.waitForFunction(() => document.querySelector("#module-startTest")?.hidden === false);
@@ -98,6 +144,7 @@ async function holdReturnToDashboard(page) {
 async function runCompleteFlow(browser, baseUrl, viewport) {
   const context = await browser.newContext({ viewport });
   await context.addInitScript(clearLocalStorageOnce);
+  await context.addInitScript(installChartStub);
   const page = await context.newPage();
   const errors = collectErrors(page);
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
@@ -186,10 +233,22 @@ async function runCompleteFlow(browser, baseUrl, viewport) {
   assert.equal(versions.original.editedNarrative, finalNarrative);
   assert.ok(versions.revision);
 
+  await page.evaluate(() => {
+    window.__printCount = 0;
+    window.print = () => {
+      window.__printCount += 1;
+    };
+  });
+  await page.click("#printReportInline");
+  await page.waitForFunction(() => document.querySelector("#printRoot")?.children.length > 0);
+  assert.equal(await page.evaluate(() => window.__printCount), 1);
+  assert.ok((await page.textContent("#printRoot")).includes("Student Performance Report"));
+  assert.equal(await page.locator("#printRoot .report-actions").count(), 0);
+  assert.ok(await page.locator("#printRoot img.print-chart-image").count() >= 1);
   await page.emulateMedia({ media: "print" });
-  assert.equal(await page.$eval("#centreSystem", (element) => getComputedStyle(element).display), "none");
-  assert.notEqual(await page.$eval("#printableReport", (element) => getComputedStyle(element).display), "none");
-  assert.equal(await page.$eval(".report-actions", (element) => getComputedStyle(element).display), "none");
+  const printBox = await page.locator("#printRoot").boundingBox();
+  assert.ok(printBox && printBox.width > 500 && printBox.height > 500);
+  assert.equal(await page.locator(".app-shell").boundingBox(), null);
   await page.emulateMedia({ media: "screen" });
 
   assert.deepEqual(errors, []);
@@ -199,6 +258,7 @@ async function runCompleteFlow(browser, baseUrl, viewport) {
 async function runRecoveryFlow(browser, baseUrl) {
   const context = await browser.newContext({ viewport: { width: 1180, height: 820 } });
   await context.addInitScript(clearLocalStorageOnce);
+  await context.addInitScript(installChartStub);
   const page = await context.newPage();
   const errors = collectErrors(page);
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
@@ -229,6 +289,7 @@ async function runRecoveryFlow(browser, baseUrl) {
 async function runPortraitLayout(browser, baseUrl) {
   const context = await browser.newContext({ viewport: { width: 768, height: 1024 } });
   await context.addInitScript(clearLocalStorageOnce);
+  await context.addInitScript(installChartStub);
   const page = await context.newPage();
   const errors = collectErrors(page);
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
@@ -251,7 +312,7 @@ async function runPortraitLayout(browser, baseUrl) {
     await runCompleteFlow(browser, baseUrl, { width: 768, height: 1024 });
     await runRecoveryFlow(browser, baseUrl);
     await runPortraitLayout(browser, baseUrl);
-    console.log("PASS v1.5.0 desktop and iPad assessment workflows");
+    console.log("PASS v1.5.1 desktop and iPad assessment workflows");
   } finally {
     await browser.close();
     await new Promise((resolve) => server.close(resolve));

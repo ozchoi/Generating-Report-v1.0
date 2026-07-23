@@ -26,7 +26,7 @@ function createServer() {
     const relativePath = requestUrl.pathname === "/" ? "index.html" : requestUrl.pathname.slice(1);
     if (relativePath === "deployment.json") {
       response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ version: "1.5.0", sha: "test", deployedAt: "test" }));
+      response.end(JSON.stringify({ version: "1.5.1", sha: "test", deployedAt: "test" }));
       return;
     }
     if (relativePath === "favicon.ico") {

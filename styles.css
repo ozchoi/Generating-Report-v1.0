@@ -1733,6 +1733,72 @@ h1 {
   display: none;
 }
 
+#printRoot {
+  display: none;
+}
+
+.print-chart-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+.chart-print-fallback {
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  color: var(--muted);
+  background: #f8fafc;
+}
+
+.report-print-header {
+  margin-bottom: 8mm;
+  border-bottom: 1px solid #d8dee8;
+  padding-bottom: 5mm;
+}
+
+.report-print-header h1 {
+  margin: 0 0 4mm;
+  color: #111827;
+  font-size: 18pt;
+  line-height: 1.15;
+}
+
+.report-print-header dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2.5mm 8mm;
+  margin: 0;
+}
+
+.report-print-header div {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2mm;
+}
+
+.report-print-header dt,
+.report-print-header dd {
+  margin: 0;
+  color: #111827;
+  font-size: 9.5pt;
+  line-height: 1.35;
+}
+
+.report-print-header dt {
+  font-weight: 700;
+}
+
+.report-print-footer {
+  margin-top: 8mm;
+  border-top: 1px solid #d8dee8;
+  padding-top: 3mm;
+  color: #667085;
+  font-size: 8.5pt;
+}
+
 @media (max-width: 1120px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -1876,160 +1942,168 @@ h1 {
 
 @media print {
   @page {
-    size: A4;
+    size: A4 portrait;
     margin: 10mm;
   }
 
+  html,
   body {
+    margin: 0;
+    padding: 0;
     background: #fff;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
 
-  body * {
-    visibility: hidden;
-  }
-
-  #printableReport,
-  #printableReport * {
-    visibility: visible;
-  }
-
-  #printableReport {
-    position: absolute;
-    inset: 0;
-  }
-
-  .centre-system,
-  .sidebar,
-  .topbar-actions,
-  .staff-only,
-  #radarModeControls,
-  #topicDetail {
+  body.is-printing-report > *:not(#printRoot) {
     display: none !important;
   }
 
-  .app-shell {
-    display: block;
+  body.is-printing-report #printRoot {
+    display: block !important;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    color: #111827;
+    background: #fff;
   }
 
-  .workspace {
-    padding: 0;
+  #printRoot,
+  #printRoot * {
+    visibility: visible !important;
+  }
+
+  #printRoot .staff-only,
+  #printRoot button,
+  #printRoot .report-actions,
+  #printRoot #radarModeControls,
+  #printRoot #topicDetail {
+    display: none !important;
   }
 
   h1 {
     font-size: 20pt;
   }
 
-  .topbar {
-    margin-bottom: 12px;
+  #printRoot .report-print-header h1 {
+    font-size: 18pt;
   }
 
-  .summary-grid {
+  #printRoot .summary-grid {
+    display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 8px;
+    gap: 6mm;
   }
 
-  .summary-grid,
-  .chart-layout {
-    grid-template-columns: 1fr 1fr;
+  #printRoot .chart-layout {
+    display: block;
   }
 
-  .chart-panel,
-  .report-panel,
-  .summary-grid article {
+  #printRoot .chart-panel,
+  #printRoot .report-panel,
+  #printRoot .summary-grid article {
     box-shadow: none;
     break-inside: avoid;
     page-break-inside: avoid;
   }
 
-  .chart-panel,
-  .report-panel {
-    padding: 10px;
+  #printRoot .chart-panel,
+  #printRoot .report-panel {
+    margin-bottom: 6mm;
+    padding: 4mm;
   }
 
-  .chart-frame,
-  .trend-frame,
-  .curve-frame {
-    height: 230px;
+  #printRoot .chart-frame,
+  #printRoot .trend-frame,
+  #printRoot .curve-frame,
+  #printRoot .print-radar-frame {
+    height: auto;
   }
 
-  .interactive-radar-panel {
+  #printRoot .interactive-radar-panel {
     display: none;
   }
 
-  .print-radar-panel {
+  #printRoot .print-radar-panel {
     display: block !important;
   }
 
-  .print-radar-frame {
-    height: 210px;
+  #printRoot .print-radar-grid {
+    gap: 6mm;
   }
 
-  .print-radar-grid {
-    gap: 10px;
-  }
-
-  .table-wrap {
+  #printRoot .table-wrap {
     overflow: visible;
   }
 
-  .insight-table,
-  .heatmap-table,
-  .boundary-table,
-  .difficulty-table {
+  #printRoot table {
+    width: 100%;
+    min-width: 0;
+    font-size: 8.5pt;
+    page-break-inside: auto;
+  }
+
+  #printRoot tr {
+    page-break-inside: avoid;
+  }
+
+  #printRoot .insight-table,
+  #printRoot .heatmap-table,
+  #printRoot .boundary-table,
+  #printRoot .difficulty-table {
     min-width: 0;
     font-size: 8.5pt;
   }
 
-  .insight-table th,
-  .insight-table td,
-  .heatmap-table th,
-  .heatmap-table td,
-  .boundary-table th,
-  .boundary-table td,
-  .difficulty-table th,
-  .difficulty-table td {
+  #printRoot .insight-table th,
+  #printRoot .insight-table td,
+  #printRoot .heatmap-table th,
+  #printRoot .heatmap-table td,
+  #printRoot .boundary-table th,
+  #printRoot .boundary-table td,
+  #printRoot .difficulty-table th,
+  #printRoot .difficulty-table td {
     padding: 6px;
   }
 
-  .status-pill,
-  .confidence-pill {
+  #printRoot .status-pill,
+  #printRoot .confidence-pill {
     min-height: 20px;
     padding: 0 6px;
     font-size: 7.5pt;
   }
 
-  .boundary-summary {
+  #printRoot .boundary-summary {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .summary-grid strong,
-  .boundary-summary strong,
-  .difficulty-note strong {
+  #printRoot .summary-grid strong,
+  #printRoot .boundary-summary strong,
+  #printRoot .difficulty-note strong {
     font-size: 12pt;
   }
 
-  .panel-heading h2 {
+  #printRoot .panel-heading h2 {
     font-size: 11pt;
   }
 
-  .panel-heading p,
-  .annotation-card p,
-  .topic-detail p,
-  .boundary-target,
-  .difficulty-note p {
+  #printRoot .panel-heading p,
+  #printRoot .annotation-card p,
+  #printRoot .topic-detail p,
+  #printRoot .boundary-target,
+  #printRoot .difficulty-note p {
     font-size: 8.5pt;
   }
 
-  #reportText {
-    display: none;
+  #printRoot .print-chart-image {
+    max-height: 120mm;
+    object-fit: contain;
   }
 
-  .report-print-narrative {
+  #printRoot .report-print-narrative {
     display: block;
     white-space: pre-wrap;
-    font-size: 9pt;
+    font-size: 9.5pt;
     line-height: 1.45;
   }
 }

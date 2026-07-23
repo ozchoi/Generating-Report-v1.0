@@ -1,10 +1,10 @@
-# QA Checklist v1.5.0
+# QA Checklist v1.5.1
 
 Run the static site through an HTTP server. Export a local backup before testing migration or reset paths.
 
 ## Fresh Browser
 
-- Footer shows `App version: v1.5.0`, storage schema v3, and deployment metadata when available.
+- Footer shows `App version: v1.5.1`, storage schema v3, and deployment metadata when available.
 - Initial title is `Assessment Dashboard / 測驗管理`; no report is selected or rendered.
 - Staff must explicitly select the demo student before Prepare Test is enabled.
 - Data Management shows the public-source examination security warning.
@@ -121,9 +121,10 @@ Run the static site through an HTTP server. Export a local backup before testing
 
 ## Print Preview
 
-- A4 output contains only `#printableReport`.
+- A4 output contains only the body-level `#printRoot` clone of the selected report.
 - Centre navigation, setup, marking, utilities and all staff-only buttons are hidden.
-- Radar charts, narrative and tables are visible without clipping.
+- Radar charts are converted to static images; narrative and tables are visible without clipping.
+- Print Report and Export PDF remain disabled until a report is selected and then use the same print preparation path.
 
 ## Security Warning
 
@@ -133,8 +134,8 @@ Run the static site through an HTTP server. Export a local backup before testing
 
 ## Hard Refresh After Deployment
 
-- `deployment.json` reports v1.5.0 and the deployed commit SHA.
-- CSS and JS use `?v=1.5.0`.
+- `deployment.json` reports v1.5.1 and the deployed commit SHA.
+- CSS and JS use `?v=1.5.1`.
 - Hard refresh loads the same version shown in the footer.
 
 ## Button Inventory

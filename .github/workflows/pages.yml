@@ -38,7 +38,7 @@ jobs:
           touch _site/.nojekyll
           cat > _site/deployment.json <<JSON
           {
-            "version": "1.5.0",
+            "version": "1.5.1",
             "sha": "${GITHUB_SHA}",
             "deployedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           }
@@ -51,7 +51,8 @@ jobs:
           test -f _site/styles.css
           grep -q "Centre-operated assessment system" _site/index.html
           grep -q "Question Bank / 題目庫" _site/index.html
-          grep -q "v=1.5.0" _site/index.html
+          grep -q "v=1.5.1" _site/index.html
+          grep -q "printRoot" _site/index.html
           grep -q "Prepare Test / 準備測驗" _site/index.html
           grep -q "Begin Test / 正式開始" _site/index.html
           grep -q "Question answers and marking logic are present in the public source" _site/index.html

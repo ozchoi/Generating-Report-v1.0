@@ -55,7 +55,7 @@ const DIFFICULTY_WEIGHTS = {
   "Exam-style": 1.4,
   Challenge: 1.5
 };
-const APP_VERSION = "1.5.0";
+const APP_VERSION = "1.5.1";
 const CENTRE_STORAGE_VERSION = 3;
 const CENTRE_STORAGE_KEY = "abilityReportCentreSystemV3";
 const PREVIOUS_CENTRE_STORAGE_KEYS = ["abilityReportCentreSystemV2", "abilityReportCentreSystemV1"];
@@ -137,6 +137,7 @@ if (hasDom) {
   initOptionalReportCharts();
   initOptionalSpreadsheetImport();
   loadDeploymentMetadata();
+  window.addEventListener("afterprint", cleanupPrintedReport);
 }
 
 function loadSampleData() {
@@ -252,8 +253,8 @@ function bindCentreEvents() {
   document.querySelector("#finaliseReport")?.addEventListener("click", finaliseActiveReport);
   document.querySelector("#createReportRevision")?.addEventListener("click", createRevisedReportVersion);
   document.querySelector("#revertReport")?.addEventListener("click", revertActiveReport);
-  document.querySelector("#printReportInline")?.addEventListener("click", () => window.print());
-  document.querySelector("#exportPdf")?.addEventListener("click", exportPdfFallback);
+  document.querySelector("#printReportInline")?.addEventListener("click", () => printActiveReport());
+  document.querySelector("#exportPdf")?.addEventListener("click", () => printActiveReport({ saveAsPdf: true }));
   document.querySelector("#exportReportInline")?.addEventListener("click", exportReport);
   elements.reportText?.addEventListener("input", preserveActiveReportEdit);
 }
@@ -698,9 +699,23 @@ function resizeReportCharts() {
   if (typeof requestAnimationFrame === "undefined") return;
   requestAnimationFrame(() => {
     [trendChart, radarChart, curveChart, printTopicRadarChart, printQuestionRadarChart].forEach((chart) => {
-      chart?.resize?.();
+      if (!isUsableChart(chart) || !chart.canvas.isConnected) return;
+      try {
+        chart.resize();
+      } catch (error) {
+        console.warn("Report chart resize skipped:", error);
+      }
     });
   });
+}
+
+function isUsableChart(chart) {
+  return Boolean(
+    chart
+    && chart.canvas
+    && chart.ctx
+    && !chart._destroyed
+  );
 }
 
 function renderDashboardModule() {
@@ -1455,10 +1470,11 @@ function renderReportsModule() {
     </button>`;
   }).join("") || "<p>No report snapshots yet.</p>";
   if (!activeReportSnapshotId) {
-    document.querySelector("#selectedReportMeta").innerHTML = "<span>No report selected</span><p>Select a report to view the full performance analysis.</p>";
+    document.querySelector("#selectedReportMeta").innerHTML = "<span>No report selected</span><p>Select a report before printing.</p>";
     const printableReport = document.querySelector("#printableReport");
     if (printableReport) printableReport.hidden = true;
   }
+  updateReportPrintActionState();
 }
 
 function sessionsTable(sessions) {
@@ -2554,6 +2570,7 @@ function renderEvidenceSnapshot(report, narrative, snapshot = null) {
     activeReportSnapshotId = snapshot.id;
     document.querySelector("#selectedReportMeta").innerHTML = `<span>Selected report</span><p>${escapeHtml(snapshot.subjectName)} · Version ${snapshot.versionNumber || 1} · ${escapeHtml(snapshot.status)} · ${formatDate(snapshot.finalisedAt || snapshot.updatedAt || snapshot.createdAt)}</p>`;
     updateReportEditingState(snapshot);
+    updateReportPrintActionState();
     document.querySelector("#printableReport").hidden = activeCentreModule !== "reports";
   }
 }
@@ -2692,9 +2709,315 @@ function updateReportEditingState(snapshot) {
   if (revisionButton) revisionButton.hidden = !final;
 }
 
-function exportPdfFallback() {
-  notify("information", "Use the browser print dialog and choose Save as PDF.");
-  window.print();
+function updateReportPrintActionState() {
+  const hasReport = Boolean(getActiveReportSnapshot());
+  ["#printReportInline", "#exportPdf"].forEach((selector) => {
+    const button = document.querySelector(selector);
+    if (!button) return;
+    button.disabled = !hasReport;
+    button.setAttribute("aria-disabled", String(!hasReport));
+    button.title = hasReport ? "" : "Select a report before printing.";
+  });
+}
+
+function getActiveReportSnapshot() {
+  return centreState?.reportSnapshots.find((report) => report.id === activeReportSnapshotId) || null;
+}
+
+function clearStaffPrintError() {
+  const panel = document.querySelector("#staffErrorPanel");
+  if (!panel) return;
+  panel.hidden = true;
+  panel.innerHTML = "";
+}
+
+async function printActiveReport({ saveAsPdf = false } = {}) {
+  try {
+    clearStaffPrintError();
+    if (!getActiveReportSnapshot()) {
+      notify("warning", "Open a report before printing.");
+      updateReportPrintActionState();
+      return;
+    }
+
+    await buildPrintableReportClone();
+
+    if (document.fonts?.ready) {
+      await document.fonts.ready;
+    }
+
+    document.body.classList.add("is-printing-report");
+    await nextAnimationFrame();
+    await nextAnimationFrame();
+
+    if (saveAsPdf) {
+      notify("information", "In the print dialog, select Save as PDF.");
+    }
+
+    window.print();
+  } catch (error) {
+    cleanupPrintedReport();
+    console.error("Report print failed:", error);
+    showStaffError("The report could not be prepared for printing.", error);
+    notify("error", "Report print preparation failed.");
+  }
+}
+
+async function buildPrintableReportClone() {
+  const snapshot = getActiveReportSnapshot();
+  const source = document.querySelector("#printableReport");
+  const printRoot = document.querySelector("#printRoot");
+
+  if (!snapshot || !source || !printRoot) {
+    throw new Error("Open a report before printing.");
+  }
+
+  updateReportNarrativeMirror();
+
+  const clone = source.cloneNode(true);
+  clone.id = "printableReportClone";
+  clone.hidden = false;
+  clone.removeAttribute("aria-hidden");
+
+  replaceReportTextareaWithPrintableNarrative(clone, snapshot);
+  replaceReportCanvasesWithImages(clone);
+  clone.prepend(buildPrintReportHeader(snapshot));
+  clone.append(buildPrintReportFooter());
+
+  clone.querySelectorAll(".staff-only, button, input, select, textarea, #radarModeControls, #topicDetail").forEach((element) => {
+    element.remove();
+  });
+  clone.querySelectorAll("[id]").forEach((element) => {
+    element.id = `${element.id}-print`;
+  });
+
+  printRoot.replaceChildren(clone);
+  printRoot.setAttribute("aria-hidden", "false");
+
+  return clone;
+}
+
+function replaceReportTextareaWithPrintableNarrative(clone, snapshot) {
+  const narrative = getPrintableReportNarrative(snapshot);
+  const printableNarrative = document.createElement("div");
+  printableNarrative.className = "report-print-narrative";
+  printableNarrative.textContent = narrative;
+
+  const textarea = clone.querySelector("#reportText");
+  const mirror = clone.querySelector("#reportPrintNarrative");
+
+  if (textarea) {
+    textarea.replaceWith(printableNarrative);
+  } else if (mirror) {
+    mirror.replaceWith(printableNarrative);
+  } else {
+    clone.append(printableNarrative);
+  }
+
+  if (mirror?.isConnected) mirror.remove();
+}
+
+function getPrintableReportNarrative(snapshot) {
+  const visibleText = elements.reportText?.value;
+  if (text(visibleText)) return visibleText;
+  return snapshot.editedNarrative || snapshot.generatedNarrative || "";
+}
+
+function buildPrintReportHeader(snapshot) {
+  const header = document.createElement("header");
+  header.className = "report-print-header";
+  const student = studentById(snapshot.studentId);
+  const evidenceJson = snapshot.evidenceJson || {};
+  const latest = evidenceJson.latestAssessment || {};
+  const latestScore = Number.isFinite(Number(latest.markAwarded)) && Number.isFinite(Number(latest.maximumMark))
+    ? `${round1(latest.markAwarded)}/${round1(latest.maximumMark)}${Number.isFinite(Number(latest.percentage)) ? ` (${Math.round(latest.percentage)}%)` : ""}`
+    : "";
+  const latestAssessment = [
+    latest.assessmentName || evidenceJson.latestSession?.testName || snapshot.testName || "Selected assessment",
+    latestScore
+  ].filter(Boolean).join(" - ");
+  const generatedDate = snapshot.finalisedAt || snapshot.updatedAt || snapshot.createdAt || "";
+
+  header.innerHTML = `
+    <h1>Student Performance Report</h1>
+    <dl>
+      <div><dt>Student:</dt><dd>${escapeHtml(student?.studentName || evidenceJson.student?.name || "Selected student")}</dd></div>
+      <div><dt>Subject:</dt><dd>${escapeHtml(snapshot.subjectName || evidenceJson.subject?.name || "Selected subject")}</dd></div>
+      <div><dt>Assessment:</dt><dd>${escapeHtml(latestAssessment)}</dd></div>
+      <div><dt>Report version:</dt><dd>Version ${escapeHtml(snapshot.versionNumber || 1)} · ${escapeHtml(snapshot.status || "Draft")}</dd></div>
+      <div><dt>Generated/finalised:</dt><dd>${escapeHtml(formatDate(generatedDate))}</dd></div>
+    </dl>
+  `;
+  return header;
+}
+
+function buildPrintReportFooter() {
+  const footer = document.createElement("footer");
+  footer.className = "report-print-footer";
+  footer.textContent = "Page generated from the centre assessment prototype.";
+  return footer;
+}
+
+function replaceReportCanvasesWithImages(clone) {
+  const canvasIds = [
+    ["trendChart", "Assessment progress chart"],
+    ["radarChart", "Interactive performance profile chart"],
+    ["curveChart", "Assessment score overview chart"],
+    ["printTopicRadarChart", "Topic performance radar chart"],
+    ["printQuestionRadarChart", "Question type performance radar chart"]
+  ];
+
+  canvasIds.forEach(([canvasId, altText]) => {
+    const clonedCanvas = [...clone.querySelectorAll("canvas")].find((canvas) => canvas.id === canvasId);
+    if (!clonedCanvas) return;
+
+    let replacement = null;
+    try {
+      replacement = canvasToPrintImage(document.querySelector(`#${canvasId}`), altText)
+        || chartInstanceToPrintImage(reportChartByCanvasId(canvasId), altText);
+    } catch (error) {
+      console.warn(`Chart conversion failed for ${canvasId}:`, error);
+    }
+
+    clonedCanvas.replaceWith(replacement || chartPrintFallback());
+  });
+}
+
+function canvasToPrintImage(sourceCanvas, altText) {
+  try {
+    if (!sourceCanvas || sourceCanvas.width <= 0 || sourceCanvas.height <= 0) return null;
+    const dataUrl = sourceCanvas.toDataURL("image/png", 1.0);
+    if (!dataUrl || !dataUrl.startsWith("data:image/png") || dataUrl.length <= 1000) return null;
+
+    const image = document.createElement("img");
+    image.className = "print-chart-image";
+    image.alt = altText;
+    image.src = dataUrl;
+    image.width = sourceCanvas.width;
+    image.height = sourceCanvas.height;
+    return image;
+  } catch (error) {
+    console.warn("Canvas image conversion skipped:", error);
+    return null;
+  }
+}
+
+function chartInstanceToPrintImage(chart, altText) {
+  if (typeof Chart === "undefined" || !isUsableChart(chart)) return null;
+  const tempCanvas = document.createElement("canvas");
+  const isRadar = chart.config?.type === "radar";
+  tempCanvas.width = isRadar ? 760 : 900;
+  tempCanvas.height = isRadar ? 620 : 470;
+  tempCanvas.style.cssText = `position:fixed;left:-10000px;top:0;width:${tempCanvas.width}px;height:${tempCanvas.height}px;background:#fff;`;
+  let printChart = null;
+
+  try {
+    document.body.append(tempCanvas);
+    const ctx = tempCanvas.getContext("2d");
+    if (!ctx) return null;
+    printChart = new Chart(ctx, {
+      type: chart.config.type,
+      data: cloneChartDataForPrint(chart.data),
+      options: printChartOptions(chart.config.type)
+    });
+    printChart.update("none");
+    return canvasToPrintImage(tempCanvas, altText);
+  } catch (error) {
+    console.warn("Temporary chart print render skipped:", error);
+    return null;
+  } finally {
+    try {
+      printChart?.destroy?.();
+    } catch (error) {
+      console.warn("Temporary chart cleanup skipped:", error);
+    }
+    tempCanvas.remove();
+  }
+}
+
+function cloneChartDataForPrint(data) {
+  return {
+    labels: [...(data?.labels || [])],
+    datasets: (data?.datasets || []).map((dataset) => ({
+      label: dataset.label,
+      data: Array.isArray(dataset.data) ? [...dataset.data] : dataset.data,
+      borderColor: dataset.borderColor,
+      backgroundColor: dataset.backgroundColor,
+      borderWidth: dataset.borderWidth,
+      borderDash: Array.isArray(dataset.borderDash) ? [...dataset.borderDash] : dataset.borderDash,
+      fill: dataset.fill,
+      pointRadius: dataset.pointRadius,
+      pointBackgroundColor: dataset.pointBackgroundColor,
+      tension: dataset.tension
+    }))
+  };
+}
+
+function printChartOptions(type) {
+  if (type === "radar") {
+    return {
+      responsive: false,
+      maintainAspectRatio: false,
+      animation: false,
+      scales: {
+        r: {
+          min: 0,
+          max: 100,
+          ticks: { stepSize: 20, backdropColor: "transparent", color: "#667085" },
+          grid: { color: "#d8dee8" },
+          pointLabels: { color: "#17202a", font: { weight: 700 } }
+        }
+      },
+      plugins: { legend: { display: false } }
+    };
+  }
+
+  return {
+    responsive: false,
+    maintainAspectRatio: false,
+    animation: false,
+    scales: {
+      y: { min: 0, max: 100, ticks: { color: "#667085" }, grid: { color: "#e4e9f1" } },
+      x: { ticks: { color: "#667085", maxRotation: 0 }, grid: { display: false } }
+    },
+    plugins: {
+      legend: { position: "bottom", labels: { boxWidth: 12, usePointStyle: true, color: "#17202a" } }
+    }
+  };
+}
+
+function reportChartByCanvasId(canvasId) {
+  return {
+    trendChart,
+    radarChart,
+    curveChart,
+    printTopicRadarChart,
+    printQuestionRadarChart
+  }[canvasId] || null;
+}
+
+function chartPrintFallback() {
+  const fallback = document.createElement("p");
+  fallback.className = "chart-print-fallback";
+  fallback.textContent = "Chart unavailable. The table evidence below remains available.";
+  return fallback;
+}
+
+function cleanupPrintedReport() {
+  document.body.classList.remove("is-printing-report");
+  const printRoot = document.querySelector("#printRoot");
+  if (printRoot) {
+    printRoot.replaceChildren();
+    printRoot.setAttribute("aria-hidden", "true");
+  }
+}
+
+function nextAnimationFrame() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      resolve();
+    });
+  });
 }
 
 function markObjectiveResponse(question, answer) {
