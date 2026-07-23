@@ -243,12 +243,28 @@ test("test mode payload excludes correct answers and mark schemes", () => {
   assert.equal(payload.questions.length, 36);
   assert.equal(payload.questions.some((question) => Object.prototype.hasOwnProperty.call(question, "correctAnswer")), false);
   assert.equal(payload.questions.some((question) => Object.prototype.hasOwnProperty.call(question, "markingPoints")), false);
+  assert.equal(payload.questions.some((question) => Object.prototype.hasOwnProperty.call(question, "topic")), false);
+  assert.equal(payload.questions.some((question) => Object.prototype.hasOwnProperty.call(question, "difficulty")), false);
+  assert.equal(payload.questions.some((question) => Object.prototype.hasOwnProperty.call(question, "title")), false);
   assert.equal(payload.questions.flatMap((question) => question.options).some((option) => Object.prototype.hasOwnProperty.call(option, "isCorrect")), false);
 });
 
-test("timer recovery uses stored server deadline", () => {
+test("prepared session does not start a timer", () => {
   const state = core.createCentreSampleSystem();
   const session = core.createTestSession(state, "STU-001", "TEST-CHEM-TRIAL-001", new Date("2026-07-16T12:00:00Z"));
+  assert.equal(session.status, "Prepared");
+  assert.equal(session.startedAt, "");
+  assert.equal(session.deadlineAt, "");
+  assert.equal(core.recoverTimeRemaining(session, new Date("2026-07-16T12:10:00Z")), 0);
+});
+
+test("begin assessment sets startedAt and device deadline", () => {
+  const state = core.createCentreSampleSystem();
+  const session = core.createTestSession(state, "STU-001", "TEST-CHEM-TRIAL-001", new Date("2026-07-16T11:55:00Z"));
+  core.beginPreparedSessionInState(state, session.id, new Date("2026-07-16T12:00:00Z"));
+  assert.equal(session.status, "In progress");
+  assert.equal(session.startedAt, "2026-07-16T12:00:00.000Z");
+  assert.equal(session.deadlineAt, "2026-07-16T12:30:00.000Z");
   assert.equal(core.recoverTimeRemaining(session, new Date("2026-07-16T12:10:00Z")), 1200);
   assert.equal(core.recoverTimeRemaining(session, new Date("2026-07-16T12:31:00Z")), 0);
 });
@@ -256,8 +272,14 @@ test("timer recovery uses stored server deadline", () => {
 test("submitted test session produces one assessment progress point", () => {
   const state = core.createCentreSampleSystem();
   const session = core.createTestSession(state, "STU-001", "TEST-CHEM-TRIAL-001", new Date("2026-07-16T12:00:00Z"));
+  core.beginPreparedSessionInState(state, session.id, new Date("2026-07-16T12:00:00Z"));
   state.studentResponses = state.studentResponses.map((response) => response.testSessionId === session.id ? { ...response, answer: "B" } : response);
   core.markSubmittedSession(state, session.id, new Date("2026-07-16T12:20:00Z"));
+  state.studentResponses.filter((response) => response.testSessionId === session.id).forEach((response) => {
+    response.markAwarded = response.maximumMark;
+    response.markingMethod = "Staff reviewed";
+  });
+  session.status = "Marked";
   const evidence = core.buildCentreReportEvidence(state, session.id);
   assert.equal(evidence.assessmentHistory.filter((item) => item.assessmentId === session.id).length, 1);
 });
@@ -268,7 +290,7 @@ test("report snapshot is saved from structured centre evidence", () => {
   const snapshot = core.buildReportSnapshotFromState(state, session.id, "Final");
   assert.equal(snapshot.studentId, "STU-001");
   assert.equal(snapshot.evidenceJson.latestSession.id, session.id);
-  assert.ok(snapshot.generatedNarrative.includes("Parent Report"));
+  assert.ok(snapshot.generatedNarrative.includes("Baseline Report"));
 });
 
 test("real Chemistry fixture contains actual option text and 48 marks", () => {
@@ -289,7 +311,7 @@ test("Section C classifications and marking points are question-specific", () =>
   assert.equal(c5.centreQuestionType, "StructuredCalculation");
   assert.equal(c5.requiredUnit, "g");
   assert.equal(c10.centreQuestionType, "ChemicalEquation");
-  assert.ok(c10.correctAnswer.includes("2Cl-"));
+  assert.ok(c10.correctAnswer.includes("2Cl^{-}"));
   assert.ok(c1.markingPoints[0].acceptedConcepts.includes("same number of protons"));
   assert.equal(JSON.stringify(rows).includes("Correct chemistry idea for"), false);
 });
@@ -317,9 +339,12 @@ test("storage migration upgrades v1 shape and adds question snapshots", () => {
   oldState.version = 1;
   delete oldState.testSessions[0].questionSnapshots;
   const migrated = core.migrateCentreState(oldState);
-  assert.equal(migrated.version, 2);
+  assert.equal(migrated.version, 3);
   assert.equal(core.validateCentreState(migrated), true);
   assert.ok(migrated.testSessions[0].questionSnapshots.length > 0);
+  assert.ok(Object.prototype.hasOwnProperty.call(migrated.testSessions[0], "deadlineAt"));
+  assert.ok(Object.prototype.hasOwnProperty.call(migrated.studentResponses[0], "answerRevisionCount"));
+  assert.ok(Object.prototype.hasOwnProperty.call(migrated.studentResponses[0], "primaryErrorCode"));
 });
 
 test("publishing validation blocks each critical missing item", () => {
@@ -345,6 +370,167 @@ test("test mode payload keeps C5 and C10 input types without mark schemes", () =
   assert.equal(payload.questions.some((question) => question.markingPoints), false);
 });
 
+test("student selection is required when preparing a session", () => {
+  const state = core.createCentreSampleSystem();
+  assert.throws(() => core.createTestSession(state, null, "TEST-CHEM-TRIAL-001", new Date()), /valid student and test/);
+});
+
+test("written answer revisions are counted on commit, not per keystroke", () => {
+  const response = { answer: "", lastCommittedAnswer: "", answerRevisionCount: 0 };
+  response.answer = "First complete answer.";
+  core.commitResponseRevision(response);
+  assert.equal(response.answerRevisionCount, 0);
+  response.answer = "First complete answer with a revised conclusion.";
+  assert.equal(response.answerRevisionCount, 0);
+  core.commitResponseRevision(response);
+  assert.equal(response.answerRevisionCount, 1);
+});
+
+test("duplicate submission is blocked by session status", () => {
+  const state = core.createCentreSampleSystem();
+  const session = core.createTestSession(state, "STU-001", "TEST-CHEM-TRIAL-001", new Date("2026-07-16T12:00:00Z"));
+  core.beginPreparedSessionInState(state, session.id, new Date("2026-07-16T12:01:00Z"));
+  assert.equal(core.markSubmittedSession(state, session.id, new Date("2026-07-16T12:10:00Z")), true);
+  const submittedAt = session.submittedAt;
+  assert.equal(core.markSubmittedSession(state, session.id, new Date("2026-07-16T12:15:00Z")), false);
+  assert.equal(session.submittedAt, submittedAt);
+});
+
+test("Needs marking sessions do not alter longitudinal report evidence", () => {
+  const state = core.createCentreSampleSystem();
+  const before = core.buildCentreReportEvidence(state, "SESSION-DEMO-001");
+  const pending = core.createTestSession(state, "STU-001", "TEST-CHEM-TRIAL-001", new Date("2026-07-20T12:00:00Z"));
+  core.beginPreparedSessionInState(state, pending.id, new Date("2026-07-20T12:01:00Z"));
+  pending.status = "Needs marking";
+  pending.submittedAt = "2026-07-20T12:20:00.000Z";
+  const after = core.buildCentreReportEvidence(state, "SESSION-DEMO-001");
+  assert.equal(after.overallProgress.assessments.length, before.overallProgress.assessments.length);
+  assert.deepEqual(after.topicProfile.map((item) => [item.label, item.mastery]), before.topicProfile.map((item) => [item.label, item.mastery]));
+  assert.deepEqual(after.difficultyProfile.map((item) => [item.label, item.mastery]), before.difficultyProfile.map((item) => [item.label, item.mastery]));
+  assert.deepEqual(after.errorPatterns, before.errorPatterns);
+  assert.ok(after.pendingMarkingSessions.some((item) => item.id === pending.id));
+});
+
+test("unmarked legacy responses are excluded instead of converted to zero", () => {
+  const assessment = {
+    assessmentId: "LEGACY-UNMARKED",
+    studentId: "STU-001",
+    studentName: "Demo Student",
+    subject: "Chemistry",
+    qualification: "IGCSE",
+    assessmentName: "Unmarked import",
+    assessmentDate: "2026-07-20",
+    maximumMark: 2
+  };
+  const question = {
+    assessmentId: assessment.assessmentId,
+    questionId: "Q1",
+    maximumMark: 2,
+    topic: "Atomic structure",
+    subtopic: "Isotopes",
+    difficulty: "Medium",
+    questionType: "Short answer",
+    answerMode: "written"
+  };
+  const response = {
+    assessmentId: assessment.assessmentId,
+    studentId: assessment.studentId,
+    questionId: question.questionId,
+    studentAnswer: "Same protons, different neutrons",
+    markAwarded: null,
+    maximumMark: 2,
+    markingMethod: "staff review required",
+    errorCode: ""
+  };
+  const report = core.buildStudentReportEvidence([assessment], [question], [response], {
+    studentName: assessment.studentName,
+    subject: assessment.subject,
+    reportDate: new Date("2026-07-21T00:00:00Z")
+  });
+  assert.equal(report.dataQuality.responseCount, 0);
+  assert.equal(report.overallProgress.assessments.length, 0);
+  assert.equal(report.topicProfile.length, 0);
+});
+
+test("fully marked sessions are included in longitudinal evidence", () => {
+  const state = core.createCentreSampleSystem();
+  const session = core.createTestSession(state, "STU-001", "TEST-CHEM-TRIAL-001", new Date("2026-07-20T12:00:00Z"));
+  core.beginPreparedSessionInState(state, session.id, new Date("2026-07-20T12:01:00Z"));
+  state.studentResponses.filter((response) => response.testSessionId === session.id).forEach((response) => {
+    response.answer = "Reviewed attempt";
+    response.markAwarded = response.maximumMark;
+    response.markingMethod = "Staff reviewed";
+  });
+  session.status = "Marked";
+  session.submittedAt = "2026-07-20T12:20:00.000Z";
+  session.markedAt = "2026-07-20T12:30:00.000Z";
+  assert.equal(core.isSessionFullyMarked(state, session), true);
+  const report = core.buildCentreReportEvidence(state, session.id);
+  assert.equal(report.overallProgress.assessments.length, 2);
+});
+
+test("primary error codes drive lost marks without secondary double counting", () => {
+  const state = core.createCentreSampleSystem();
+  const session = state.testSessions.find((item) => item.id === "SESSION-DEMO-001");
+  const sessionResponses = state.studentResponses.filter((response) => response.testSessionId === session.id);
+  sessionResponses.forEach((response) => {
+    response.markAwarded = response.maximumMark;
+    response.primaryErrorCode = "";
+    response.secondaryErrorCodes = [];
+    response.errorCodes = [];
+  });
+  sessionResponses[0].markAwarded = 0;
+  sessionResponses[0].primaryErrorCode = "Knowledge gap";
+  sessionResponses[0].secondaryErrorCodes = ["Unit error", "Question interpretation"];
+  sessionResponses[0].errorCodes = ["Knowledge gap", "Unit error", "Question interpretation"];
+  const report = core.buildCentreReportEvidence(state, session.id);
+  assert.equal(report.errorPatterns.find((item) => item.errorCode === "Knowledge gap").lostMarks, 1);
+  assert.equal(report.errorPatterns.some((item) => item.errorCode === "Unit error"), false);
+  assert.deepEqual(report.responseDetails[0].secondaryErrorCodes, ["Unit error", "Question interpretation"]);
+});
+
+test("final report revisions preserve the original immutable version", () => {
+  const state = core.createCentreSampleSystem();
+  const original = state.reportSnapshots[0];
+  const originalNarrative = original.editedNarrative;
+  const revision = core.createRevisedReportSnapshot(state, original.id, new Date("2026-07-18T10:00:00Z"));
+  assert.equal(original.status, "Final");
+  assert.equal(original.editedNarrative, originalNarrative);
+  assert.equal(revision.status, "Draft");
+  assert.equal(revision.versionNumber, original.versionNumber + 1);
+  assert.equal(revision.parentReportId, original.id);
+  core.finaliseReportSnapshot(state, revision.id, "Revised narrative", new Date("2026-07-18T11:00:00Z"));
+  assert.equal(revision.status, "Final");
+  assert.equal(revision.finalisedAt, "2026-07-18T11:00:00.000Z");
+  assert.equal(original.supersededByReportId, revision.id);
+});
+
+test("baseline report uses cautious headings and contains no trend or forecast claims", () => {
+  const state = core.createCentreSampleSystem();
+  const narrative = state.reportSnapshots[0].generatedNarrative;
+  assert.ok(narrative.includes("Positive Indicators"));
+  assert.ok(narrative.includes("Possible Priorities"));
+  assert.ok(narrative.includes("This report is based on one diagnostic assessment"));
+  assert.equal(/improving|declining|forecast|predicted grade|percentile/i.test(narrative), false);
+});
+
+test("scientific notation renderer escapes HTML before applying explicit notation", () => {
+  const rendered = core.formatScientificText('<img src=x onerror=alert(1)> Cu^{2+} -> Cl_{2} <=>');
+  assert.equal(rendered.includes("<img"), false);
+  assert.ok(rendered.includes("&lt;img"));
+  assert.ok(rendered.includes("Cu<sup>2+</sup>"));
+  assert.ok(rendered.includes("Cl<sub>2</sub>"));
+  assert.ok(rendered.includes("→"));
+  assert.ok(rendered.includes("⇌"));
+});
+
+test("written autosave does not rebuild the active textarea", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const autosaveBlock = app.slice(app.indexOf("function scheduleResponseSave"), app.indexOf("function persistResponse"));
+  assert.equal(autosaveBlock.includes("renderCurrentQuestion"), false);
+  assert.equal(autosaveBlock.includes("renderTestMode"), false);
+});
+
 test("static source exposes repaired controls and optional dependency fallbacks", () => {
   const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
@@ -355,10 +541,13 @@ test("static source exposes repaired controls and optional dependency fallbacks"
   assert.ok(app.includes("typeof XLSX"));
   assert.ok(html.includes("Centre-operated assessment system"));
   assert.ok(html.includes("Question Bank / 題目庫"));
-  assert.ok(html.includes("?v=1.4.3"));
+  assert.ok(html.includes("?v=1.5.0"));
   assert.ok(html.includes('<section id="printableReport" hidden>'));
   assert.ok(html.includes('id="reportModuleMount"'));
   assert.ok(app.includes("mountPrintableReport();"));
   assert.ok(app.includes('printableReport.hidden = moduleName !== "reports"'));
   assert.ok(app.includes("resizeReportCharts();"));
+  assert.ok(html.includes("Prepare Test / 準備測驗"));
+  assert.ok(html.includes("Begin Test / 正式開始"));
+  assert.ok(html.includes("Public prototype only."));
 });

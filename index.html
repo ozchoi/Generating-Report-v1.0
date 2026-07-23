@@ -3,14 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Student Ability Report Generator</title>
+    <title>Assessment Dashboard / 測驗管理</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=1.4.3" />
+    <link rel="stylesheet" href="./styles.css?v=1.5.0" />
   </head>
   <body>
     <main class="app-shell">
@@ -79,36 +79,47 @@
         <header class="topbar">
           <div>
             <p class="eyebrow">Centre-operated assessment system</p>
-            <h1 id="pageTitle">Student Performance Report</h1>
-          </div>
-          <div class="topbar-actions">
-            <button id="printReport" type="button">Print report</button>
-            <button id="exportReport" type="button">Export text</button>
+            <h1 id="pageTitle">Assessment Dashboard / 測驗管理</h1>
           </div>
         </header>
 
         <section class="centre-system" id="centreSystem">
           <div class="module-nav" aria-label="Assessment System modules">
-            <button type="button" data-module="dashboard" class="active">Assessment System</button>
-            <button type="button" data-module="questionBank">Question Bank / 題目庫</button>
-            <button type="button" data-module="testBuilder">Test Builder / 試卷建立</button>
-            <button type="button" data-module="startTest">Start Test / 開始測驗</button>
-            <button type="button" data-module="sessions">Test Sessions / 測驗記錄</button>
-            <button type="button" data-module="marking">Marking / 批改</button>
-            <button type="button" data-module="reports">Student Reports / 學生報告</button>
-            <button type="button" data-module="import">Import Existing Results</button>
-            <button type="button" data-module="data">Data Management</button>
+            <div class="module-nav-group">
+              <span>Primary workflow</span>
+              <div>
+                <button type="button" data-module="dashboard" class="active">Assessment Dashboard / 測驗總覽</button>
+                <button type="button" data-module="startTest">Run Test / 開始測驗</button>
+                <button type="button" data-module="sessions">Assessment Records / 測驗記錄</button>
+                <button type="button" data-module="marking">Marking Centre / 批改中心</button>
+                <button type="button" data-module="reports">Reports / 學生報告</button>
+              </div>
+            </div>
+            <div class="module-nav-group">
+              <span>Assessment setup</span>
+              <div>
+                <button type="button" data-module="questionBank">Question Bank / 題目庫</button>
+                <button type="button" data-module="testBuilder">Test Builder / 試卷建立</button>
+              </div>
+            </div>
+            <div class="module-nav-group module-nav-utilities">
+              <span>Utilities</span>
+              <div>
+                <button type="button" data-module="import">Import Existing Results</button>
+                <button type="button" data-module="data">Data Management</button>
+              </div>
+            </div>
           </div>
 
           <article class="module-panel" id="module-dashboard">
             <div class="panel-heading">
               <div>
-                <h2>Centre Dashboard</h2>
-                <p>Fast staff workflow: select a student, start a test, mark, and generate a report.</p>
+                <h2>Assessment Dashboard / 測驗總覽</h2>
+                <p>Prepare an assessment, hand the device to the student, review written answers, and generate a report.</p>
               </div>
             </div>
             <div class="quick-actions">
-              <button type="button" data-jump-module="startTest">Start a Test</button>
+              <button type="button" data-jump-module="startTest">Run a Test</button>
               <button type="button" data-jump-module="testBuilder">Create a Test</button>
               <button type="button" data-jump-module="questionBank">Question Bank</button>
               <button type="button" data-jump-module="marking">Continue Marking</button>
@@ -123,8 +134,8 @@
           <article class="module-panel" id="module-startTest" hidden>
             <div class="panel-heading">
               <div>
-                <h2>Start Test / 開始測驗</h2>
-                <p>Select an existing student, select a published test, then hand the centre device to the student.</p>
+                <h2>Run Test / 開始測驗</h2>
+                <p>Select a student and published assessment, prepare it, then hand the centre device to the student.</p>
               </div>
             </div>
             <div class="workflow-grid">
@@ -141,10 +152,10 @@
               </section>
               <section class="workflow-card">
                 <span class="step-label">Step 3</span>
-                <h3>Confirm Session</h3>
+                <h3>Review &amp; Prepare / 確認及準備</h3>
                 <div id="startTestSummary" class="session-summary"></div>
                 <div class="actions single-action">
-                  <button id="startSelectedTest" type="button">Start Test</button>
+                  <button id="startSelectedTest" type="button">Prepare Test / 準備測驗</button>
                 </div>
               </section>
             </div>
@@ -178,7 +189,7 @@
           <article class="module-panel" id="module-sessions" hidden>
             <div class="panel-heading">
               <div>
-                <h2>Test Sessions / 測驗記錄</h2>
+                <h2>Assessment Records / 測驗記錄</h2>
                 <p>One submitted session creates one assessment-progress point.</p>
               </div>
             </div>
@@ -190,7 +201,7 @@
           <article class="module-panel" id="module-marking" hidden>
             <div class="panel-heading">
               <div>
-                <h2>Marking / 批改</h2>
+                <h2>Marking Centre / 批改中心</h2>
                 <p>Objective questions are auto-marked; written answers require staff review.</p>
               </div>
             </div>
@@ -200,7 +211,7 @@
           <article class="module-panel" id="module-reports" hidden>
             <div class="panel-heading">
               <div>
-                <h2>Student Reports / 學生報告</h2>
+                <h2>Reports / 學生報告</h2>
                 <p>Report snapshots retain the evidence and generated narrative used at creation time.</p>
               </div>
             </div>
@@ -262,6 +273,10 @@
                 <p>Prototype data is stored only in this browser on this device. Do not enter real confidential student information into the public demo.</p>
               </div>
             </div>
+            <div class="security-warning" role="note">
+              <strong>Public prototype only.</strong>
+              <p>Question answers and marking logic are present in the public source. Do not use this deployment for secure examinations.</p>
+            </div>
             <div class="quick-actions">
               <button id="exportLocalBackup" type="button">Export Local Backup</button>
               <label class="button-like" for="importLocalBackup">Import Local Backup</label>
@@ -312,12 +327,12 @@
           <article class="chart-panel interactive-radar-panel">
             <div class="panel-heading">
               <div>
-                <h2 id="radarHeading">Ability Radar</h2>
+                <h2 id="radarHeading">Performance Profile / 表現概覽</h2>
                 <p id="radarDescription">Skill profile for the selected subject.</p>
               </div>
               <div class="segmented-control" id="radarModeControls" aria-label="radar mode">
-                <button type="button" data-mode="topic" class="active">Topic Mastery</button>
-                <button type="button" data-mode="challenge">Challenge-adjusted</button>
+                <button type="button" data-mode="topic" class="active">Topic Performance</button>
+                <button type="button" data-mode="challenge">Challenge-weighted View</button>
                 <button type="button" data-mode="question">Question Type</button>
               </div>
             </div>
@@ -330,7 +345,7 @@
           <article class="chart-panel print-radar-panel wide-panel">
             <div class="panel-heading">
               <div>
-                <h2>Ability Radar</h2>
+                <h2>Performance Profile / 表現概覽</h2>
                 <p>Topic and question-type profiles for print.</p>
               </div>
             </div>
@@ -353,7 +368,7 @@
           <article class="chart-panel wide">
             <div class="panel-heading">
               <div>
-                <h2>Exam Readiness / Grade Boundary Position</h2>
+                <h2>Assessment Score Overview / 測驗成績概覽</h2>
                 <p id="curveDescription">Smoothed estimated score distribution with grade boundaries.</p>
               </div>
             </div>
@@ -367,7 +382,7 @@
           <article class="chart-panel wide-panel">
             <div class="panel-heading">
               <div>
-                <h2>Strong / Weak Topic Map</h2>
+                <h2>Topic Performance and Learning Priorities<br />課題表現及學習重點</h2>
                 <p>Accuracy, trend, status, and data confidence by topic.</p>
               </div>
             </div>
@@ -379,7 +394,7 @@
           <article class="chart-panel wide-panel">
             <div class="panel-heading">
               <div>
-                <h2>Evidence and Data Confidence</h2>
+                <h2>Evidence Coverage / 評估證據</h2>
                 <p>Validation summary and coverage for the selected report.</p>
               </div>
             </div>
@@ -389,7 +404,7 @@
           <article class="chart-panel wide-panel">
             <div class="panel-heading">
               <div>
-                <h2>Error Patterns</h2>
+                <h2>Mark-Loss Patterns / 失分模式</h2>
                 <p>Main mark-loss patterns from tutor-approved marks.</p>
               </div>
             </div>
@@ -399,8 +414,8 @@
           <article class="chart-panel wide-panel">
             <div class="panel-heading">
               <div>
-                <h2>Topic Mastery Heatmap</h2>
-                <p>Recent topic mastery across the latest four assessment weeks.</p>
+                <h2>Topic Performance Across Assessments<br />各次測驗課題表現</h2>
+                <p>Topic performance across completed and fully marked assessments.</p>
               </div>
             </div>
             <div class="table-wrap">
@@ -411,8 +426,8 @@
           <article class="chart-panel">
             <div class="panel-heading">
               <div>
-                <h2>Difficulty-adjusted Performance</h2>
-                <p>Accuracy by difficulty and adjusted index for fairer weekly interpretation.</p>
+                <h2>Performance by Question Difficulty<br />不同難度題目表現</h2>
+                <p>Accuracy by question difficulty for fairer comparison between assessments.</p>
               </div>
             </div>
             <div id="difficultyPanel" class="difficulty-panel"></div>
@@ -421,19 +436,21 @@
           <article class="report-panel">
             <div class="panel-heading">
               <div>
-                <h2>Generated Parent Report</h2>
-                <p>Editable narrative based on the uploaded results.</p>
+                <h2>Student Performance Summary<br />學生表現摘要</h2>
+                <p>Editable summary based on reviewed assessment evidence.</p>
               </div>
             </div>
             <div class="report-actions staff-only">
               <button id="saveReportDraft" type="button">Save Draft</button>
               <button id="finaliseReport" type="button">Finalise Report</button>
+              <button id="createReportRevision" type="button" hidden>Create Revised Version</button>
               <button id="revertReport" type="button">Revert to Generated Version</button>
               <button id="printReportInline" type="button">Print Report</button>
               <button id="exportPdf" type="button">Export PDF</button>
               <button id="exportReportInline" type="button">Export Text</button>
             </div>
             <textarea id="reportText" spellcheck="true"></textarea>
+            <div id="reportPrintNarrative" class="report-print-narrative" aria-hidden="true"></div>
           </article>
         </section>
         </section>
@@ -457,6 +474,20 @@
       </div>
     </div>
     <section id="testMode" class="test-mode" hidden>
+      <div id="sessionGate" class="session-gate" hidden>
+        <article class="session-gate-card">
+          <p class="eyebrow" id="sessionGateEyebrow">Assessment ready</p>
+          <h1 id="sessionGateTitle">Prepared assessment</h1>
+          <div id="sessionGateBody"></div>
+          <div class="session-gate-actions">
+            <button id="beginPreparedTest" type="button">Begin Test / 正式開始</button>
+            <button id="resumeActiveTest" type="button" hidden>Resume Assessment / 繼續測驗</button>
+            <button id="sessionGateReturn" type="button">Hold to Return to Centre Dashboard</button>
+          </div>
+          <p class="muted-line">Device guard only - not secure authentication.</p>
+          <p id="sessionGateGuardStatus" class="guard-status" role="status" aria-live="polite">Press and hold the return button for three seconds.</p>
+        </article>
+      </div>
       <div class="test-mode-shell">
         <header class="test-mode-header">
           <div>
@@ -472,7 +503,16 @@
           <div id="testProgressBar"></div>
         </div>
         <main class="test-layout">
-          <aside id="testQuestionNav" class="test-question-nav"></aside>
+          <aside class="test-question-sidebar">
+            <div id="testProgressSummary" class="test-progress-summary" aria-live="polite"></div>
+            <div class="test-nav-legend" aria-label="Question status legend">
+              <span><i class="legend-current"></i>Current</span>
+              <span><i class="legend-answered"></i>Answered</span>
+              <span><i class="legend-flagged"></i>Flagged</span>
+              <span><i class="legend-unanswered"></i>Unanswered</span>
+            </div>
+            <nav id="testQuestionNav" class="test-question-nav" aria-label="Questions"></nav>
+          </aside>
           <section class="test-question-card">
             <div id="testQuestionContent"></div>
             <div id="testAnswerArea" class="test-answer-area"></div>
@@ -495,7 +535,7 @@
       </div>
     </section>
 
-    <footer class="version-footer staff-only" id="versionFooter">App version: v1.4.3 · Deployment: local · Deployed: unknown · Storage schema: v2</footer>
-    <script src="./app.js?v=1.4.3"></script>
+    <footer class="version-footer staff-only" id="versionFooter">App version: v1.5.0 · Deployment: local · Deployed: unknown · Storage schema: v3</footer>
+    <script src="./app.js?v=1.5.0"></script>
   </body>
 </html>

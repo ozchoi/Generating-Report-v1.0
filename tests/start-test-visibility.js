@@ -41,7 +41,7 @@ function createServer() {
 
     if (relativePath === "deployment.json") {
       response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ version: "1.4.3", sha: "test", deployedAt: "test" }));
+      response.end(JSON.stringify({ version: "1.5.0", sha: "test", deployedAt: "test" }));
       return;
     }
 
@@ -95,8 +95,10 @@ function createServer() {
     await page.waitForFunction(() => document.querySelector("#module-startTest")?.hidden === false);
     await page.waitForSelector("#startSelectedTest");
 
+    assert.equal(await page.$eval("#startSelectedTest", (button) => button.disabled), true);
+    await page.click('[data-student-id="STU-001"]');
     const summaryText = await page.textContent("#startTestSummary");
-    assert.ok(summaryText.includes("Demo Student A"), `Expected Demo Student A to be selected, got: ${summaryText}`);
+    assert.ok(summaryText.includes("Demo Student A"), `Expected Demo Student A after explicit selection, got: ${summaryText}`);
     assert.ok(summaryText.includes("IGCSE Chemistry Trial Test (Mixed Difficulty)"), `Expected Chemistry test to be selected, got: ${summaryText}`);
 
     const state = await page.$eval("#startSelectedTest", (button) => {
@@ -125,20 +127,24 @@ function createServer() {
     assert.ok(state.height >= 48, `Expected height at least 48px, got ${state.height}`);
     assert.equal(isTransparent(state.backgroundColor), false, `Expected non-transparent background, got ${state.backgroundColor}`);
     assert.equal(isWhite(state.color) && isWhite(state.backgroundColor), false, `Foreground and background are both white: ${state.color} / ${state.backgroundColor}`);
-    assert.ok(state.text.includes("Start Test"), `Unexpected button text: ${state.text}`);
+    assert.ok(state.text.includes("Prepare Test"), `Unexpected button text: ${state.text}`);
 
     await page.evaluate(() => {
-      window.__startSelectedTestCallCount = 0;
-      const original = startSelectedTestWithDuplicateProtection;
-      startSelectedTestWithDuplicateProtection = function patchedStartSelectedTest(...args) {
-        window.__startSelectedTestCallCount += 1;
+      window.__prepareSelectedTestCallCount = 0;
+      const original = prepareSelectedTest;
+      prepareSelectedTest = function patchedPrepareSelectedTest(...args) {
+        window.__prepareSelectedTestCallCount += 1;
         return original.apply(this, args);
       };
     });
 
     await page.click("#startSelectedTest");
-    await page.waitForFunction(() => window.__startSelectedTestCallCount === 1);
+    await page.waitForFunction(() => window.__prepareSelectedTestCallCount === 1);
     await page.waitForFunction(() => document.querySelector("#testMode")?.hidden === false);
+    await page.waitForFunction(() => document.querySelector("#sessionGate")?.hidden === false);
+    assert.equal(await page.$eval("#testTimer", (timer) => timer.textContent), "--:--");
+    await page.click("#beginPreparedTest");
+    await page.waitForFunction(() => document.querySelector(".test-mode-shell")?.hidden === false);
 
     await page.evaluate(() => finaliseActiveTestSubmission(false));
     await page.waitForFunction(() => document.querySelector("#completionScreen")?.hidden === false);
@@ -157,7 +163,7 @@ function createServer() {
     await page.waitForFunction(() => document.querySelector("#testMode")?.hidden === true);
     await page.waitForFunction(() => document.querySelector("#module-dashboard")?.hidden === false);
     assert.deepEqual(consoleErrors, []);
-    console.log("PASS rendered Start Test button visibility, submission completion, and guarded dashboard return");
+    console.log("PASS explicit preparation, student begin, submission completion, and guarded dashboard return");
   } finally {
     await browser.close();
     await new Promise((resolve) => server.close(resolve));

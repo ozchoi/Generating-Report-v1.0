@@ -15,20 +15,23 @@ const QUESTION_TYPES = [
 ];
 
 const ERROR_CODES = [
-  "",
+  "No attempt",
   "Knowledge gap",
   "Misconception",
-  "Calculation method",
+  "Incomplete explanation",
+  "Incorrect calculation method",
   "Arithmetic error",
   "Unit error",
   "Significant figures",
-  "Question interpretation",
+  "Equation not balanced",
+  "Incorrect chemical species",
   "Command word",
-  "Practical method",
+  "Question interpretation",
   "Data interpretation",
-  "Incomplete explanation",
-  "Careless error",
-  "No attempt"
+  "Practical method",
+  "Presentation or notation",
+  "Other",
+  "No error classification"
 ];
 
 const DIFFICULTIES = ["Easy", "Medium", "Hard", "Exam-style", "Challenge"];
@@ -39,11 +42,16 @@ const DIFFICULTY_WEIGHTS = {
   "Exam-style": 1.4,
   Challenge: 1.5
 };
-const APP_VERSION = "1.4.3";
-const CENTRE_STORAGE_VERSION = 2;
-const CENTRE_STORAGE_KEY = "abilityReportCentreSystemV2";
-const OLD_CENTRE_STORAGE_KEY = "abilityReportCentreSystemV1";
+const APP_VERSION = "1.5.0";
+const CENTRE_STORAGE_VERSION = 3;
+const CENTRE_STORAGE_KEY = "abilityReportCentreSystemV3";
+const PREVIOUS_CENTRE_STORAGE_KEYS = ["abilityReportCentreSystemV2", "abilityReportCentreSystemV1"];
 const RETURN_GUARD_DURATION_MS = 3000;
+const DemoLocalAnswerProvider = Object.freeze({
+  getStudentQuestionPayload: buildLocalStudentQuestionPayload,
+  getStaffMarkingData: buildLocalStaffMarkingData,
+  markObjectiveResponse: markObjectiveResponseLocal
+});
 
 let assessments = [];
 let questions = [];
@@ -63,8 +71,11 @@ let activeSessionId = null;
 let activeQuestionIndex = 0;
 let activeTestPayload = null;
 let activeReportSnapshotId = null;
+let activeCentreModule = "dashboard";
+let markingFilter = "Needs review";
 let testTimerInterval = null;
 let returnGuardTimer = null;
+let submissionInProgress = false;
 const responseSaveTimers = new Map();
 
 const hasDom = typeof document !== "undefined";
@@ -92,8 +103,6 @@ if (hasDom) {
     notify("success", "Sample report evidence loaded");
   });
   document.querySelector("#downloadTemplate")?.addEventListener("click", downloadTemplates);
-  document.querySelector("#printReport")?.addEventListener("click", () => window.print());
-  document.querySelector("#exportReport")?.addEventListener("click", exportReport);
   elements.studentSelect?.addEventListener("change", () => {
     renderSubjectOptions();
     render();
@@ -129,11 +138,13 @@ function loadSampleData() {
 
 function initCentreSystem() {
   centreState = loadCentreState() || createCentreSampleSystem();
-  selectedCentreStudentId = centreState.students[0]?.studentId ?? null;
+  selectedCentreStudentId = null;
   selectedTestTemplateId = centreState.testTemplates.find((item) => item.status === "Published")?.id ?? centreState.testTemplates[0]?.id ?? null;
   bindCentreEvents();
   renderCentreSystem();
   persistCentreState();
+  const activeSessions = centreState.testSessions.filter((session) => ["Prepared", "In progress"].includes(session.status));
+  if (activeSessions.length === 1) showSessionGate(activeSessions[0]);
 }
 
 function initCentreSystemSafely() {
@@ -148,9 +159,6 @@ function initCentreSystemSafely() {
 
 function initOptionalReportCharts() {
   try {
-    loadSampleData();
-    renderSelectors();
-    render();
     if (typeof Chart === "undefined") {
       notify("warning", "Chart.js did not load. Tables and centre workflow remain available.");
     }
@@ -194,13 +202,14 @@ function bindCentreEvents() {
     renderStartTestModule();
   });
   document.querySelector("#startSelectedTest")?.addEventListener("click", () => {
-    startSelectedTestWithDuplicateProtection();
+    prepareSelectedTest();
   });
   document.querySelector("#recentSessionsTable")?.addEventListener("click", handleSessionAction);
   document.querySelector("#allSessionsTable")?.addEventListener("click", handleSessionAction);
   document.querySelector("#sessionRecoveryPanel")?.addEventListener("click", handleSessionAction);
   document.querySelector("#markingPanel")?.addEventListener("click", handleMarkingAction);
   document.querySelector("#markingPanel")?.addEventListener("input", handleMarkInput);
+  document.querySelector("#markingPanel")?.addEventListener("change", handleMarkInput);
   document.querySelector("#reportSnapshotList")?.addEventListener("click", (event) => {
     const item = event.target.closest("[data-report-id]");
     if (!item) return;
@@ -211,6 +220,8 @@ function bindCentreEvents() {
   document.querySelector("#flagQuestion")?.addEventListener("click", toggleCurrentQuestionFlag);
   document.querySelector("#submitTest")?.addEventListener("click", () => submitActiveTest(false));
   document.querySelector("#submitReviewDialog")?.addEventListener("click", handleSubmitReviewAction);
+  document.querySelector("#beginPreparedTest")?.addEventListener("click", () => beginPreparedSession(activeSessionId));
+  document.querySelector("#resumeActiveTest")?.addEventListener("click", () => resumeInProgressSession(activeSessionId));
   bindReturnDeviceGuard();
   document.querySelector("#closeStaffDrawer")?.addEventListener("click", closeStaffDrawer);
   document.querySelector("#exportLocalBackup")?.addEventListener("click", exportLocalBackup);
@@ -218,6 +229,7 @@ function bindCentreEvents() {
   document.querySelector("#resetDemoData")?.addEventListener("click", resetDemoData);
   document.querySelector("#saveReportDraft")?.addEventListener("click", saveActiveReportDraft);
   document.querySelector("#finaliseReport")?.addEventListener("click", finaliseActiveReport);
+  document.querySelector("#createReportRevision")?.addEventListener("click", createRevisedReportVersion);
   document.querySelector("#revertReport")?.addEventListener("click", revertActiveReport);
   document.querySelector("#printReportInline")?.addEventListener("click", () => window.print());
   document.querySelector("#exportPdf")?.addEventListener("click", exportPdfFallback);
@@ -227,23 +239,29 @@ function bindCentreEvents() {
 
 function loadCentreState() {
   if (typeof localStorage === "undefined") return null;
+  let recoveryData = "";
   try {
     const current = localStorage.getItem(CENTRE_STORAGE_KEY);
     if (current) {
+      recoveryData = current;
       const parsed = JSON.parse(current);
       if (validateCentreState(parsed)) return migrateCentreState(parsed);
-      throw new Error("Stored v2 data failed schema validation.");
+      throw new Error("Stored v3 data failed schema validation.");
     }
-    const oldState = localStorage.getItem(OLD_CENTRE_STORAGE_KEY);
-    if (oldState) {
+    for (const oldKey of PREVIOUS_CENTRE_STORAGE_KEYS) {
+      const oldState = localStorage.getItem(oldKey);
+      if (!oldState) continue;
+      recoveryData = oldState;
       const migrated = migrateCentreState(JSON.parse(oldState));
       if (validateCentreState(migrated)) {
-        notify("information", "Existing v1 browser data was migrated to local schema v2.");
+        notify("information", `Existing browser data was migrated from ${oldKey.endsWith("V2") ? "v2" : "v1"} to local schema v3.`);
         return migrated;
       }
       offerOldDataRecovery(oldState);
+      break;
     }
   } catch (error) {
+    if (recoveryData) offerOldDataRecovery(recoveryData);
     showStaffError("Stored local prototype data could not be loaded. Demo data has been restored.", error);
     console.error(error);
     return null;
@@ -286,10 +304,31 @@ function migrateCentreState(state) {
     studentResponses: Array.isArray(state.studentResponses) ? state.studentResponses : [],
     reportSnapshots: Array.isArray(state.reportSnapshots) ? state.reportSnapshots : []
   };
-  next.testSessions = next.testSessions.map((session) => session.questionSnapshots ? session : {
+  next.testSessions = next.testSessions.map((session) => ({
     ...session,
-    questionSnapshots: freezeQuestionsForTemplate(next, session.testTemplateId)
+    deadlineAt: session.deadlineAt || session.serverDeadline || "",
+    questionSnapshots: session.questionSnapshots?.length
+      ? session.questionSnapshots
+      : freezeQuestionsForTemplate(next, session.testTemplateId)
+  }));
+  next.studentResponses = next.studentResponses.map((response) => {
+    const legacyCodes = Array.isArray(response.errorCodes) ? response.errorCodes.filter(Boolean) : [];
+    return {
+      ...response,
+      answerRevisionCount: Number(response.answerRevisionCount ?? response.answerChangeCount ?? 0),
+      lastCommittedAnswer: response.lastCommittedAnswer ?? structuredCloneSafe(response.answer),
+      primaryErrorCode: response.primaryErrorCode || legacyCodes[0] || "",
+      secondaryErrorCodes: Array.isArray(response.secondaryErrorCodes) ? response.secondaryErrorCodes : legacyCodes.slice(1),
+      markingSuggestion: response.markingSuggestion?.matchQuality ? response.markingSuggestion : null
+    };
   });
+  next.reportSnapshots = next.reportSnapshots.map((snapshot) => ({
+    ...snapshot,
+    versionNumber: Number(snapshot.versionNumber || 1),
+    parentReportId: snapshot.parentReportId || "",
+    finalisedAt: snapshot.finalisedAt || (snapshot.status === "Final" ? snapshot.updatedAt || snapshot.createdAt || "" : ""),
+    supersededByReportId: snapshot.supersededByReportId || ""
+  }));
   return next;
 }
 
@@ -380,8 +419,9 @@ async function importLocalBackup(event) {
     const migrated = migrateCentreState(importedState);
     if (!validateCentreState(migrated)) throw new Error("Backup did not match the centre-state schema.");
     centreState = migrated;
-    selectedCentreStudentId = centreState.students[0]?.studentId ?? null;
+    selectedCentreStudentId = null;
     selectedTestTemplateId = centreState.testTemplates[0]?.id ?? null;
+    activeReportSnapshotId = null;
     persistCentreState();
     renderCentreSystem();
     document.querySelector("#dataManagementStatus").innerHTML = `<span>Imported</span><p>${escapeHtml(file.name)} was imported into this browser only.</p>`;
@@ -395,10 +435,11 @@ async function importLocalBackup(event) {
 }
 
 function resetDemoData() {
-  if (!window.confirm("Reset demo data in this browser? This does not affect any external system.")) return;
+  if (!window.confirm("Reset demo data in this browser? Export a local backup first if you need to keep this device's records.")) return;
   centreState = createCentreSampleSystem();
-  selectedCentreStudentId = centreState.students[0]?.studentId ?? null;
+  selectedCentreStudentId = null;
   selectedTestTemplateId = centreState.testTemplates.find((item) => item.status === "Published")?.id ?? centreState.testTemplates[0]?.id ?? null;
+  activeReportSnapshotId = null;
   persistCentreState();
   renderCentreSystem();
   document.querySelector("#dataManagementStatus").innerHTML = `<span>Reset complete</span><p>Demo centre data has been restored in this browser.</p>`;
@@ -469,7 +510,7 @@ function createCentreSampleSystem() {
     markedAt: "2026-07-16T11:08:00.000Z",
     reportGeneratedAt: "2026-07-16T11:12:00.000Z",
     timeLimitMinutes: 30,
-    serverDeadline: "2026-07-16T11:00:00.000Z",
+    deadlineAt: "2026-07-16T11:00:00.000Z",
     timeUsedSeconds: 1440,
     questionSnapshots: freezeQuestionsForTemplate({ questions: questionBank, testSections }, testTemplate.id),
     createdAt: "2026-07-16T10:30:00.000Z",
@@ -487,12 +528,15 @@ function createCentreSampleSystem() {
       firstViewedAt: demoSession.startedAt,
       lastSavedAt: demoSession.submittedAt,
       timeSpentSeconds: 35,
-      answerChangeCount: response.markAwarded === question.maximumMark ? 1 : 2,
+      answerRevisionCount: response.markAwarded === question.maximumMark ? 1 : 2,
+      lastCommittedAnswer: structuredCloneSafe(answerFromSample(response, question)),
       flagged: false,
       markAwarded: response.markAwarded,
       maximumMark: response.maximumMark,
       markingMethod: questionRequiresStaffReview(question) ? "Staff reviewed" : "Automatic",
       markingConfidence: questionRequiresStaffReview(question) ? 0.95 : 1,
+      primaryErrorCode: response.errorCode ? normaliseCentreErrorCode(response.errorCode) : "",
+      secondaryErrorCodes: [],
       errorCodes: response.errorCode ? [normaliseCentreErrorCode(response.errorCode)] : [],
       feedback: response.tutorFeedback || "",
       internalNote: "",
@@ -570,6 +614,7 @@ function renderCentreSystem() {
 }
 
 function showCentreModule(moduleName) {
+  activeCentreModule = moduleName;
   document.querySelectorAll("[id^='module-']").forEach((panel) => {
     panel.hidden = panel.id !== `module-${moduleName}`;
   });
@@ -578,12 +623,18 @@ function showCentreModule(moduleName) {
   });
   const printableReport = document.querySelector("#printableReport");
   if (printableReport) {
-    printableReport.hidden = moduleName !== "reports";
+    printableReport.hidden = moduleName !== "reports" || !activeReportSnapshotId;
   }
+  if (moduleName !== "reports") document.querySelector("#pageTitle").textContent = "Assessment Dashboard / 測驗管理";
   if (moduleName === "marking") renderMarkingModule();
   if (moduleName === "reports") {
     renderReportsModule();
-    resizeReportCharts();
+    if (activeReportSnapshotId) {
+      const snapshot = centreState.reportSnapshots.find((report) => report.id === activeReportSnapshotId);
+      const student = snapshot ? studentById(snapshot.studentId) : null;
+      if (snapshot && student) document.querySelector("#pageTitle").textContent = `${student.studentName} — ${snapshot.subjectName} Performance Report`;
+      resizeReportCharts();
+    }
   }
 }
 
@@ -610,11 +661,11 @@ function renderDashboardModule() {
   recoveryPanel.innerHTML = recovery ? `
     <div class="panel-heading">
       <div>
-        <h2>Unfinished test session detected</h2>
-        <p>${escapeHtml(studentById(recovery.studentId).studentName)} — ${escapeHtml(recovery.testName)}. Time remaining: ${formatRemaining(recoverTimeRemaining(recovery, new Date()))}</p>
+        <h2>Unfinished assessment detected</h2>
+        <p>${escapeHtml(studentById(recovery.studentId).studentName)} — ${escapeHtml(recovery.testName)}. ${recovery.status === "Prepared" ? "Prepared; timer not started." : `Time remaining: ${formatRemaining(recoverTimeRemaining(recovery, new Date()))}`}</p>
       </div>
       <div class="topbar-actions">
-        <button type="button" data-session-action="resume" data-session-id="${recovery.id}">Resume Test</button>
+        <button type="button" data-session-action="${recovery.status === "Prepared" ? "continue-prepared" : "resume"}" data-session-id="${recovery.id}">${recovery.status === "Prepared" ? "Continue Prepared Assessment" : "Resume Assessment"}</button>
         <button type="button" data-session-action="cancel" data-session-id="${recovery.id}">Cancel Session</button>
       </div>
     </div>` : "";
@@ -646,6 +697,7 @@ function renderStartTestModule() {
   const template = selectedTestTemplateId ? templateById(selectedTestTemplateId) : null;
   const summary = template ? templateSummary(centreState, template.id) : null;
   document.querySelector("#startTestSummary").innerHTML = student && template ? `
+    <p class="confirmation-warning">Please confirm that the device is being given to: <strong>${escapeHtml(student.studentName)}</strong></p>
     <div class="boundary-summary">
       <div><span>Student</span><strong>${escapeHtml(student.studentName)}</strong></div>
       <div><span>Test</span><strong>${escapeHtml(template.name)}</strong></div>
@@ -653,14 +705,15 @@ function renderStartTestModule() {
       <div><span>Questions</span><strong>${summary.questionCount}</strong></div>
       <div><span>Maximum marks</span><strong>${summary.maximumMark}</strong></div>
       <div><span>Time limit</span><strong>${template.timeLimitMinutes} min</strong></div>
-    </div>` : "<p>Select one student and one published test.</p>";
+    </div>` : `<p>${!student && !template ? "Select a student and a published test." : !student ? "Select and confirm a student." : "Select a published test."}</p>`;
   const startButton = document.querySelector("#startSelectedTest");
   if (startButton) {
     const ready = Boolean(student && template);
     startButton.hidden = false;
     startButton.disabled = !ready;
     startButton.setAttribute("aria-disabled", String(!ready));
-    startButton.textContent = ready ? "Start Test / 開始測驗" : "Select a student and test";
+    startButton.textContent = ready ? "Prepare Test / 準備測驗" : !student && !template ? "Select a student and test" : !student ? "Select a student" : "Select a test";
+    startButton.title = ready ? "Freeze this assessment and open the student cover page. The timer will not start yet." : startButton.textContent;
   }
 }
 
@@ -714,15 +767,15 @@ function handleQuestionBankAction(event) {
 
 function previewQuestion(question) {
   const options = question.options?.length
-    ? `<ul>${question.options.map((option) => `<li><strong>${escapeHtml(option.label)}.</strong> ${escapeHtml(option.content)}${option.isCorrect ? " <strong>(correct)</strong>" : ""}</li>`).join("")}</ul>`
+    ? `<ul>${question.options.map((option) => `<li><strong>${escapeHtml(option.label)}.</strong> ${formatScientificText(option.content)}${option.isCorrect ? " <strong>(correct)</strong>" : ""}</li>`).join("")}</ul>`
     : "<p>No options for this question type.</p>";
   const marking = question.markingPoints?.length
-    ? `<ul>${question.markingPoints.map((point) => `<li>${escapeHtml(point.description)} (${point.markValue})<br><span class="muted-line">${escapeHtml((point.acceptedConcepts || []).join("; "))}</span></li>`).join("")}</ul>`
+    ? `<ul>${question.markingPoints.map((point) => `<li>${formatScientificText(point.description)} (${point.markValue})<br><span class="muted-line">${formatScientificText((point.acceptedConcepts || []).join("; "))}</span></li>`).join("")}</ul>`
     : "<p>No written marking points.</p>";
   openStaffDrawer("Question Preview", `${question.id} · version ${question.version}`, `
     <div class="drawer-stack">
       <h3>${escapeHtml(question.title)}</h3>
-      <p>${escapeHtml(question.questionContent.prompt)}</p>
+      <p>${formatScientificText(question.questionContent.prompt)}</p>
       <div class="boundary-summary">
         <div><span>Topic</span><strong>${escapeHtml(question.topic || "Missing")}</strong></div>
         <div><span>Subtopic</span><strong>${escapeHtml(question.subtopic || "Missing")}</strong></div>
@@ -732,7 +785,7 @@ function previewQuestion(question) {
         <div><span>Status</span><strong>${escapeHtml(question.status)}</strong></div>
       </div>
       <h3>Options</h3>${options}
-      <h3>Correct answer</h3><p>${escapeHtml(question.correctAnswer || "Staff marked")}</p>
+      <h3>Correct answer</h3><p>${formatScientificText(question.correctAnswer || "Staff marked")}</p>
       <h3>Marking points</h3>${marking}
       <h3>Source/version</h3><p>${escapeHtml(question.source || "Centre question bank")} · Version ${question.version}</p>
     </div>`);
@@ -1127,9 +1180,8 @@ function previewStudentTest(templateId) {
       const question = centreState.questions.find((item) => item.id === ref.questionId && item.version === ref.questionVersion) || centreState.questions.find((item) => item.id === ref.questionId);
       if (!question) return `<p>Missing question ${escapeHtml(ref.questionId)}</p>`;
       return `<article class="preview-question">
-        <span class="step-label">Question ${index + 1}</span>
-        <p><strong>${escapeHtml(question.title)}</strong></p>
-        <p>${escapeHtml(question.questionContent.prompt)}</p>
+        <span class="step-label">${escapeHtml(section.title)} · Question ${index + 1}</span>
+        <p>${formatScientificText(question.questionContent.prompt)}</p>
         ${studentPreviewAnswerMarkup(question)}
       </article>`;
     }).join("")}`).join("");
@@ -1137,7 +1189,7 @@ function previewStudentTest(templateId) {
 }
 
 function studentPreviewAnswerMarkup(question) {
-  if (question.questionType === "MCQ") return `<ul>${question.options.map((option) => `<li>${escapeHtml(option.label)}. ${escapeHtml(option.content)}</li>`).join("")}</ul>`;
+  if (question.questionType === "MCQ") return `<ul>${question.options.map((option) => `<li>${escapeHtml(option.label)}. ${formatScientificText(option.content)}</li>`).join("")}</ul>`;
   if (question.questionType === "TrueFalse") return "<p>True / False selection</p>";
   if (question.questionType === "StructuredCalculation") return "<p>Working / Final answer / Unit fields</p>";
   if (question.questionType === "ChemicalEquation") return "<p>Chemical equation input field</p>";
@@ -1150,8 +1202,8 @@ function previewMarkScheme(templateId) {
   const body = questionsForTemplate.map((question) => `
     <article class="preview-question">
       <h3>${escapeHtml(question.id)} ${escapeHtml(question.title)}</h3>
-      <p><strong>Answer:</strong> ${escapeHtml(question.correctAnswer || "Staff reviewed")}</p>
-      <ul>${(question.markingPoints || []).map((point) => `<li>${escapeHtml(point.description)} (${point.markValue})</li>`).join("") || "<li>No written marking points.</li>"}</ul>
+      <p><strong>Answer:</strong> ${formatScientificText(question.correctAnswer || "Staff reviewed")}</p>
+      <ul>${(question.markingPoints || []).map((point) => `<li>${formatScientificText(point.description)} (${point.markValue})</li>`).join("") || "<li>No written marking points.</li>"}</ul>
     </article>`).join("");
   openStaffDrawer("Preview Mark Scheme", template.name, body);
 }
@@ -1163,12 +1215,17 @@ function renderSessionsModule() {
 function renderReportsModule() {
   document.querySelector("#reportSnapshotList").innerHTML = centreState.reportSnapshots.map((snapshot) => {
     const student = studentById(snapshot.studentId);
-    return `<button type="button" class="selection-item" data-report-id="${snapshot.id}">
-      <strong>${escapeHtml(student.studentName)} — ${escapeHtml(snapshot.subjectName)}</strong>
-      <p>${escapeHtml(snapshot.status)} · ${formatDate(snapshot.createdAt)} · ${escapeHtml(snapshot.testSessionId || "Longitudinal report")}</p>
+    return `<button type="button" class="selection-item ${snapshot.id === activeReportSnapshotId ? "selected" : ""}" data-report-id="${snapshot.id}">
+      <strong>${escapeHtml(snapshot.generatedNarrative.split("\n").find(Boolean) || `${student.studentName} — ${snapshot.subjectName} Report`)}</strong>
+      <p>Version ${snapshot.versionNumber || 1} · ${escapeHtml(snapshot.status)} · ${formatDate(snapshot.finalisedAt || snapshot.updatedAt || snapshot.createdAt)}</p>
       <p>${escapeHtml(snapshot.generatedNarrative.split("\n").find(Boolean) || "Student report snapshot")}</p>
     </button>`;
   }).join("") || "<p>No report snapshots yet.</p>";
+  if (!activeReportSnapshotId) {
+    document.querySelector("#selectedReportMeta").innerHTML = "<span>No report selected</span><p>Select a report to view the full performance analysis.</p>";
+    const printableReport = document.querySelector("#printableReport");
+    if (printableReport) printableReport.hidden = true;
+  }
 }
 
 function sessionsTable(sessions) {
@@ -1182,7 +1239,8 @@ function sessionsTable(sessions) {
 }
 
 function sessionActions(session) {
-  if (session.status === "In progress") return `<button type="button" data-session-action="resume" data-session-id="${session.id}">Resume</button>`;
+  if (session.status === "Prepared") return `<button type="button" data-session-action="continue-prepared" data-session-id="${session.id}">Continue Prepared Assessment</button>`;
+  if (session.status === "In progress") return `<button type="button" data-session-action="resume" data-session-id="${session.id}">Resume Assessment</button>`;
   if (session.status === "Needs marking") return `<button type="button" data-session-action="mark" data-session-id="${session.id}">Review Written Answers</button>`;
   if (session.status === "Marked") return `<button type="button" data-session-action="report" data-session-id="${session.id}">Generate Report</button>`;
   if (session.status === "Report generated") return `<button type="button" data-session-action="view-report" data-session-id="${session.id}">Open Report</button>`;
@@ -1194,7 +1252,8 @@ function handleSessionAction(event) {
   if (!button) return;
   const sessionId = button.dataset.sessionId;
   const action = button.dataset.sessionAction;
-  if (action === "resume") openTestMode(sessionId);
+  if (action === "continue-prepared") showSessionGate(sessionById(sessionId));
+  if (action === "resume") resumeInProgressSession(sessionId);
   if (action === "cancel") cancelSession(sessionId);
   if (action === "mark") {
     activeSessionId = sessionId;
@@ -1208,7 +1267,7 @@ function handleSessionAction(event) {
   }
 }
 
-function startSelectedTestWithDuplicateProtection() {
+function prepareSelectedTest() {
   if (!selectedCentreStudentId || !selectedTestTemplateId) {
     notify("warning", "Select one student and one published test first.");
     return;
@@ -1216,100 +1275,167 @@ function startSelectedTestWithDuplicateProtection() {
   const existing = centreState.testSessions.find((session) =>
     session.studentId === selectedCentreStudentId
     && session.testTemplateId === selectedTestTemplateId
-    && session.status === "In progress"
+    && ["Prepared", "In progress"].includes(session.status)
   );
   if (existing) {
-    openStaffDrawer("Unfinished Session Already Exists", existing.testName, `
-      <p>An unfinished session already exists.</p>
+    openStaffDrawer("An unfinished assessment already exists.", existing.testName, `
+      <p>The existing assessment is ${escapeHtml(existing.status.toLowerCase())}.</p>
       <div class="submit-review-actions">
-        <button type="button" data-session-action="resume" data-session-id="${existing.id}">Resume Existing Session</button>
-        <button type="button" data-session-action="cancel" data-session-id="${existing.id}">Cancel Existing Session</button>
-        <button type="button" data-duplicate-start-new="${existing.id}">Start New Session</button>
+        ${existing.status === "Prepared"
+          ? `<button type="button" data-session-action="continue-prepared" data-session-id="${existing.id}">Continue Prepared Assessment</button>`
+          : `<button type="button" data-session-action="resume" data-session-id="${existing.id}">Resume In-Progress Assessment</button>`}
+        <button type="button" data-session-action="cancel" data-session-id="${existing.id}">Cancel Existing Assessment</button>
+        <button type="button" data-duplicate-start-new="${existing.id}">Start a Separate New Assessment</button>
       </div>`);
+    document.querySelector("#staffDrawerBody [data-session-action='continue-prepared']")?.addEventListener("click", () => {
+      closeStaffDrawer();
+      showSessionGate(existing);
+    });
     document.querySelector("#staffDrawerBody [data-session-action='resume']")?.addEventListener("click", () => {
       closeStaffDrawer();
-      openTestMode(existing.id);
+      resumeInProgressSession(existing.id);
     });
     document.querySelector("#staffDrawerBody [data-session-action='cancel']")?.addEventListener("click", () => {
       closeStaffDrawer();
       cancelSession(existing.id);
     });
     document.querySelector("#staffDrawerBody [data-duplicate-start-new]")?.addEventListener("click", () => {
-      if (!window.confirm("Start a new session while retaining the unfinished one?")) return;
+      if (!window.confirm("Start a separate new assessment while retaining the unfinished assessment?")) return;
       closeStaffDrawer();
-      startNewSelectedSession();
+      prepareNewSelectedSession();
     });
     return;
   }
-  startNewSelectedSession();
+  prepareNewSelectedSession();
 }
 
-function startNewSelectedSession() {
+function startSelectedTestWithDuplicateProtection() {
+  prepareSelectedTest();
+}
+
+function prepareNewSelectedSession() {
   const session = createTestSession(centreState, selectedCentreStudentId, selectedTestTemplateId, new Date());
   persistCentreState();
   renderCentreSystem();
-  notify("success", "Session created");
-  openTestMode(session.id);
+  notify("success", "Assessment prepared. The timer has not started.");
+  showSessionGate(session);
 }
 
 function createTestSession(state, studentId, testTemplateId, now) {
   const template = state.testTemplates.find((item) => item.id === testTemplateId);
-  const questionsForTemplate = getTemplateQuestions(state, testTemplateId);
-  const startedAt = now.toISOString();
+  if (!template || !studentId) throw new Error("A valid student and test are required to prepare an assessment.");
+  const questionSnapshots = freezeQuestionsForTemplate(state, testTemplateId);
+  const createdAt = now.toISOString();
   const session = {
     id: makeId("SESSION"),
     studentId,
     testTemplateId,
     testName: template.name,
     subjectName: template.subjectName,
-    status: "In progress",
-    startedAt,
+    status: "Prepared",
+    startedAt: "",
     submittedAt: "",
     markedAt: "",
     reportGeneratedAt: "",
     timeLimitMinutes: template.timeLimitMinutes,
-    serverDeadline: new Date(now.getTime() + template.timeLimitMinutes * 60000).toISOString(),
+    deadlineAt: "",
     timeUsedSeconds: 0,
-    questionSnapshots: questionsForTemplate.map((question) => freezeQuestionSnapshot(question)),
-    createdAt: startedAt,
-    updatedAt: startedAt
+    questionSnapshots,
+    currentQuestionIndex: 0,
+    createdAt,
+    updatedAt: createdAt
   };
   state.testSessions.unshift(session);
-  for (const question of questionsForTemplate) {
+  for (const question of questionSnapshots) {
+    const emptyAnswer = emptyAnswerForQuestion(question);
     state.studentResponses = upsertStudentResponse(state.studentResponses, {
       id: makeId("RESP"),
       testSessionId: session.id,
       studentId,
-      questionId: question.id,
+      questionId: question.questionId || question.id,
       questionVersion: question.version,
-      questionSnapshot: freezeQuestionSnapshot(question),
-      answer: emptyAnswerForQuestion(question),
+      questionSnapshot: structuredCloneSafe(question),
+      answer: emptyAnswer,
+      lastCommittedAnswer: structuredCloneSafe(emptyAnswer),
       firstViewedAt: "",
       lastSavedAt: "",
       timeSpentSeconds: 0,
-      answerChangeCount: 0,
+      answerRevisionCount: 0,
       flagged: false,
       markAwarded: null,
       maximumMark: question.maximumMark,
       markingMethod: "",
       markingConfidence: 0,
+      primaryErrorCode: "",
+      secondaryErrorCodes: [],
       errorCodes: [],
       feedback: "",
       internalNote: "",
       markedAt: "",
-      createdAt: startedAt,
-      updatedAt: startedAt
+      createdAt,
+      updatedAt: createdAt
     });
   }
   return session;
 }
 
-function openTestMode(sessionId) {
+function showSessionGate(session) {
+  if (!session || !["Prepared", "In progress"].includes(session.status)) return;
+  activeSessionId = session.id;
+  activeTestPayload = buildTestModePayload(centreState, session.id);
+  const student = studentById(session.studentId);
+  const summary = templateSummary(centreState, session.testTemplateId);
+  const prepared = session.status === "Prepared";
+  document.querySelector("#sessionGateEyebrow").textContent = prepared ? "Assessment ready" : "Assessment in progress";
+  document.querySelector("#sessionGateTitle").textContent = session.testName;
+  document.querySelector("#sessionGateBody").innerHTML = `
+    <div class="boundary-summary session-cover-summary">
+      <div><span>Student</span><strong>${escapeHtml(student.studentName)}</strong></div>
+      <div><span>Questions</span><strong>${summary.questionCount}</strong></div>
+      <div><span>Maximum marks</span><strong>${summary.maximumMark}</strong></div>
+      <div><span>${prepared ? "Time allowed" : "Time remaining"}</span><strong>${prepared ? `${session.timeLimitMinutes} minutes` : formatRemaining(recoverTimeRemaining(session, new Date()))}</strong></div>
+    </div>
+    ${prepared
+      ? `<div class="assessment-instructions"><h2>Instructions</h2><ul><li>Answer all questions.</li><li>Your answers save automatically.</li><li>Use Flag Question if you wish to return later.</li><li>Once submitted, responses cannot be changed.</li></ul><p class="deadline-note">Timing uses this device's stored clock in the public prototype.</p></div>`
+      : `<p class="deadline-note">The stored device-based prototype deadline is preserved after refresh.</p>`}`;
+  document.querySelector("#beginPreparedTest").hidden = !prepared;
+  document.querySelector("#resumeActiveTest").hidden = prepared;
+  document.querySelector("#testMode").hidden = false;
+  document.querySelector("#sessionGate").hidden = false;
+  document.querySelector(".test-mode-shell").hidden = true;
+  document.querySelector("#completionScreen").hidden = true;
+}
+
+function beginPreparedSession(sessionId, now = new Date()) {
+  const session = beginPreparedSessionInState(centreState, sessionId, now);
+  if (!session) {
+    notify("warning", "This assessment is no longer waiting to begin.");
+    return null;
+  }
+  selectedCentreStudentId = null;
+  persistCentreState();
+  notify("success", "Assessment started");
+  resumeInProgressSession(session.id);
+  return session;
+}
+
+function beginPreparedSessionInState(state, sessionId, now = new Date()) {
+  const session = state?.testSessions.find((item) => item.id === sessionId);
+  if (!session || session.status !== "Prepared") return null;
+  session.status = "In progress";
+  session.startedAt = now.toISOString();
+  session.deadlineAt = new Date(now.getTime() + session.timeLimitMinutes * 60000).toISOString();
+  session.updatedAt = session.startedAt;
+  return session;
+}
+
+function resumeInProgressSession(sessionId) {
   const session = sessionById(sessionId);
   if (!session || session.status !== "In progress") return;
   activeSessionId = sessionId;
-  activeQuestionIndex = 0;
+  activeQuestionIndex = clamp(Number(session.currentQuestionIndex || 0), 0, Math.max(0, session.questionSnapshots.length - 1));
   activeTestPayload = buildTestModePayload(centreState, sessionId);
+  document.querySelector("#sessionGate").hidden = true;
   document.querySelector("#completionScreen").hidden = true;
   document.querySelector(".test-mode-shell").hidden = false;
   document.querySelector("#testMode").hidden = false;
@@ -1319,26 +1445,38 @@ function openTestMode(sessionId) {
   startTestTimer();
 }
 
+function openTestMode(sessionId) {
+  resumeInProgressSession(sessionId);
+}
+
 function closeTestMode(moduleName = "dashboard") {
   document.querySelector("#testMode").hidden = true;
   document.querySelector(".test-mode-shell").hidden = false;
   document.querySelector("#completionScreen").hidden = true;
+  document.querySelector("#sessionGate").hidden = true;
   clearInterval(testTimerInterval);
   clearTimeout(returnGuardTimer);
   returnGuardTimer = null;
   activeTestPayload = null;
+  activeSessionId = null;
+  selectedCentreStudentId = null;
   renderCentreSystem();
   showCentreModule(moduleName);
 }
 
 function bindReturnDeviceGuard() {
-  const button = document.querySelector("#returnToDashboard");
+  bindHoldToDashboard("#returnToDashboard", "#completionGuardStatus", "Return to Centre Dashboard / 返回中心系統");
+  bindHoldToDashboard("#sessionGateReturn", "#sessionGateGuardStatus", "Hold to Return to Centre Dashboard");
+}
+
+function bindHoldToDashboard(buttonSelector, statusSelector, defaultText) {
+  const button = document.querySelector(buttonSelector);
+  const status = document.querySelector(statusSelector);
   if (!button) return;
-  const status = document.querySelector("#completionGuardStatus");
   const resetGuardText = () => {
     button.classList.remove("is-holding");
-    button.textContent = "Return to Centre Dashboard / 返回中心系統";
-    if (status) status.textContent = "Press and hold until the dashboard opens.";
+    button.textContent = defaultText;
+    if (status) status.textContent = "Press and hold the return button for three seconds.";
   };
   const finishReturnGuard = () => {
     returnGuardTimer = null;
@@ -1408,26 +1546,72 @@ function renderQuestionNavigation() {
   const responsesForSession = responsesBySession(activeSessionId);
   document.querySelector("#testQuestionNav").innerHTML = activeTestPayload.questions.map((question, index) => {
     const response = responsesForSession.find((item) => item.questionId === question.id);
-    return `<button type="button" class="${index === activeQuestionIndex ? "active" : ""} ${isAnswered(response?.answer) ? "answered" : ""} ${response?.flagged ? "flagged" : ""}" data-question-index="${index}">${index + 1}</button>`;
+    const states = questionNavigationStates(response, index);
+    return `<button type="button" class="${states.classes}" data-question-index="${index}" aria-label="${escapeHtml(states.label)}"><span>${index + 1}</span>${response?.flagged ? '<small aria-hidden="true">Flag</small>' : ""}</button>`;
   }).join("");
   document.querySelector("#testQuestionNav").querySelectorAll("button").forEach((button) => {
     button.addEventListener("click", () => {
       saveActiveResponseNow();
       activeQuestionIndex = Number(button.dataset.questionIndex);
+      const session = sessionById(activeSessionId);
+      session.currentQuestionIndex = activeQuestionIndex;
+      persistCentreState();
       renderTestMode();
     });
   });
+  updateProgressSummary();
+}
+
+function questionNavigationStates(response, index) {
+  const current = index === activeQuestionIndex;
+  const answered = isAnswered(response?.answer);
+  const flagged = Boolean(response?.flagged);
+  const classes = [current ? "active" : "", answered ? "answered" : "unanswered", flagged ? "flagged" : ""].filter(Boolean).join(" ");
+  const labels = [`Question ${index + 1}`, current ? "current" : "", answered ? "answered" : "unanswered", flagged ? "flagged" : ""].filter(Boolean);
+  return { classes, label: labels.join(", ") };
+}
+
+function updateQuestionNavigationIndicators() {
+  if (!activeTestPayload) return;
+  activeTestPayload.questions.forEach((question, index) => {
+    const button = document.querySelector(`#testQuestionNav [data-question-index="${index}"]`);
+    if (!button) return;
+    const response = responseFor(activeSessionId, question.id);
+    const states = questionNavigationStates(response, index);
+    button.className = states.classes;
+    button.setAttribute("aria-label", states.label);
+    let flag = button.querySelector("small");
+    if (response.flagged && !flag) {
+      flag = document.createElement("small");
+      flag.setAttribute("aria-hidden", "true");
+      flag.textContent = "Flag";
+      button.append(flag);
+    } else if (!response.flagged) {
+      flag?.remove();
+    }
+  });
+}
+
+function updateProgressSummary() {
+  if (!activeTestPayload) return;
+  const responsesForSession = responsesBySession(activeSessionId);
   const answered = responsesForSession.filter((response) => isAnswered(response.answer)).length;
-  document.querySelector("#testProgressBar").style.width = `${(answered / activeTestPayload.questions.length) * 100}%`;
+  const flagged = responsesForSession.filter((response) => response.flagged).length;
+  const total = activeTestPayload.questions.length;
+  const remaining = Math.max(0, total - answered);
+  const summary = document.querySelector("#testProgressSummary");
+  if (summary) summary.innerHTML = `<strong>${answered} of ${total} answered</strong><span>${flagged} flagged</span><span>${remaining} remaining</span>`;
+  document.querySelector("#testProgressBar").style.width = `${total ? (answered / total) * 100 : 0}%`;
 }
 
 function renderCurrentQuestion() {
   const question = activeTestPayload.questions[activeQuestionIndex];
   const response = responseFor(activeSessionId, question.id);
+  if (!response.firstViewedAt) response.firstViewedAt = new Date().toISOString();
   document.querySelector("#testQuestionContent").innerHTML = `
-    <span class="step-label">${escapeHtml(question.sectionTitle)} · Question ${activeQuestionIndex + 1} of ${activeTestPayload.questions.length}</span>
-    <h2>${escapeHtml(question.title)}</h2>
-    <p>${escapeHtml(question.questionContent.prompt)}</p>
+    <span class="step-label">${escapeHtml(question.sectionTitle)}</span>
+    <h2>Question ${activeQuestionIndex + 1} of ${activeTestPayload.questions.length}</h2>
+    <p>${formatScientificText(question.questionContent.prompt)}</p>
     <p class="muted-line">${question.maximumMark} mark${question.maximumMark === 1 ? "" : "s"}</p>`;
   document.querySelector("#testAnswerArea").innerHTML = answerInputMarkup(question, response);
   bindAnswerInputs(question);
@@ -1449,7 +1633,7 @@ function updateTestControlState(response) {
 
 function answerInputMarkup(question, response) {
   if (question.questionType === "MCQ") {
-    return question.options.map((option) => `<button type="button" class="answer-card ${response.answer === option.label ? "selected" : ""}" data-answer="${escapeHtml(option.label)}"><strong>${escapeHtml(option.label)}</strong> ${escapeHtml(option.content)}</button>`).join("");
+    return question.options.map((option) => `<button type="button" class="answer-card ${response.answer === option.label ? "selected" : ""}" data-answer="${escapeHtml(option.label)}"><strong>${escapeHtml(option.label)}</strong> ${formatScientificText(option.content)}</button>`).join("");
   }
   if (question.questionType === "TrueFalse") {
     return `<div class="tf-grid"><button type="button" class="tf-button answer-card ${normaliseTrueFalse(response.answer) === true ? "selected" : ""}" data-answer="True">True</button><button type="button" class="tf-button answer-card ${normaliseTrueFalse(response.answer) === false ? "selected" : ""}" data-answer="False">False</button></div>`;
@@ -1459,52 +1643,107 @@ function answerInputMarkup(question, response) {
     return `<label>Working<textarea data-answer-field="working" rows="5">${escapeHtml(answer.working || "")}</textarea></label><label>Final answer<input data-answer-field="finalAnswer" value="${escapeHtml(answer.finalAnswer || "")}" /></label><label>Unit<input data-answer-field="unit" value="${escapeHtml(answer.unit || "")}" /></label>`;
   }
   if (question.questionType === "ChemicalEquation") {
-    return `<label>Chemical equation<input data-answer-field="equation" inputmode="text" autocomplete="off" placeholder="e.g. 2Cl- -> Cl2 + 2e-" value="${escapeHtml(typeof response.answer === "string" ? response.answer : response.answer?.equation || "")}" /></label>`;
+    return `<label>Chemical equation<input data-answer-field="equation" inputmode="text" autocomplete="off" placeholder="e.g. 2Cl^{-} -> Cl_{2} + 2e^{-}" value="${escapeHtml(typeof response.answer === "string" ? response.answer : response.answer?.equation || "")}" /></label>`;
   }
   return `<label>Answer<textarea data-answer-field="text" rows="8">${escapeHtml(typeof response.answer === "string" ? response.answer : "")}</textarea></label>`;
 }
 
 function bindAnswerInputs(question) {
   document.querySelectorAll("#testAnswerArea [data-answer]").forEach((button) => {
-    button.addEventListener("click", () => updateActiveAnswer(button.dataset.answer));
+    button.addEventListener("click", () => updateLocalAnswer(button.dataset.answer, { objective: true }));
   });
   document.querySelectorAll("#testAnswerArea [data-answer-field]").forEach((input) => {
     input.addEventListener("input", () => {
       const current = responseFor(activeSessionId, question.id).answer;
       const next = typeof current === "object" && current ? { ...current } : {};
       next[input.dataset.answerField] = input.value;
-      updateActiveAnswer(question.questionType === "ShortAnswer" || question.questionType === "ChemicalEquation" ? next.text || next.equation || "" : next);
+      updateLocalAnswer(question.questionType === "ShortAnswer" || question.questionType === "ChemicalEquation" ? next.text || next.equation || "" : next);
     });
+    input.addEventListener("blur", commitActiveResponse);
   });
 }
 
-function updateActiveAnswer(answer) {
+function updateLocalAnswer(answer, { objective = false } = {}) {
   const question = activeTestPayload.questions[activeQuestionIndex];
   const response = responseFor(activeSessionId, question.id);
-  response.answer = answer;
-  response.answerChangeCount += 1;
-  response.lastSavedAt = new Date().toISOString();
-  response.updatedAt = response.lastSavedAt;
-  document.querySelector("#autosaveStatus").textContent = "Saving / 儲存中";
-  persistCentreState();
+  const previous = structuredCloneSafe(response.answer);
+  if (objective && isAnswered(previous) && isAnswered(answer) && meaningfulAnswerKey(previous) !== meaningfulAnswerKey(answer)) {
+    response.answerRevisionCount = Number(response.answerRevisionCount || 0) + 1;
+  }
+  response.answer = structuredCloneSafe(answer);
+  response.updatedAt = new Date().toISOString();
+  updateAutosaveStatus("saving");
+  updateQuestionNavigationIndicators();
+  updateProgressSummary();
+  if (objective) {
+    response.lastCommittedAnswer = structuredCloneSafe(answer);
+    document.querySelectorAll("#testAnswerArea [data-answer]").forEach((button) => {
+      button.classList.toggle("selected", normaliseAnswer(button.dataset.answer) === normaliseAnswer(answer));
+    });
+    persistResponse(response);
+    return;
+  }
+  scheduleResponseSave(response);
+}
+
+function scheduleResponseSave(response) {
   clearTimeout(responseSaveTimers.get(response.id));
   responseSaveTimers.set(response.id, setTimeout(() => {
-    persistCentreState();
-    document.querySelector("#autosaveStatus").textContent = "Saved / 已儲存";
-    renderQuestionNavigation();
-    renderCurrentQuestion();
+    persistResponse(response);
   }, 800));
+}
+
+function persistResponse(response) {
+  response.lastSavedAt = new Date().toISOString();
+  response.updatedAt = response.lastSavedAt;
+  persistCentreState();
+  updateAutosaveStatus("saved");
+  updateQuestionNavigationIndicators();
+  updateProgressSummary();
+}
+
+function updateAutosaveStatus(status) {
+  const label = document.querySelector("#autosaveStatus");
+  if (label) label.textContent = status === "saving" ? "Saving / 儲存中" : "Saved / 已儲存";
+}
+
+function meaningfulAnswerKey(answer) {
+  return displayAnswer(answer).replace(/\s+/g, " ").trim();
+}
+
+function commitResponseRevision(response) {
+  const previous = response.lastCommittedAnswer;
+  if (isAnswered(previous) && meaningfulAnswerKey(previous) !== meaningfulAnswerKey(response.answer)) {
+    response.answerRevisionCount = Number(response.answerRevisionCount || 0) + 1;
+  }
+  response.lastCommittedAnswer = structuredCloneSafe(response.answer);
+}
+
+function commitActiveResponse() {
+  if (!activeTestPayload) return;
+  const question = activeTestPayload.questions[activeQuestionIndex];
+  const response = responseFor(activeSessionId, question.id);
+  clearTimeout(responseSaveTimers.get(response.id));
+  responseSaveTimers.delete(response.id);
+  commitResponseRevision(response);
+  persistResponse(response);
+}
+
+function updateActiveAnswer(answer) {
+  updateLocalAnswer(answer, { objective: ["MCQ", "TrueFalse"].includes(activeTestPayload?.questions[activeQuestionIndex]?.questionType) });
 }
 
 function saveActiveResponseNow() {
   if (!activeTestPayload) return;
-  persistCentreState();
-  document.querySelector("#autosaveStatus").textContent = "Saved / 已儲存";
+  commitActiveResponse();
 }
 
 function moveTestQuestion(delta) {
   saveActiveResponseNow();
   activeQuestionIndex = clamp(activeQuestionIndex + delta, 0, activeTestPayload.questions.length - 1);
+  const session = sessionById(activeSessionId);
+  session.currentQuestionIndex = activeQuestionIndex;
+  persistCentreState();
   renderTestMode();
 }
 
@@ -1514,7 +1753,9 @@ function toggleCurrentQuestionFlag() {
   response.flagged = !response.flagged;
   response.updatedAt = new Date().toISOString();
   persistCentreState();
-  renderTestMode();
+  updateTestControlState(response);
+  updateQuestionNavigationIndicators();
+  updateProgressSummary();
 }
 
 function startTestTimer() {
@@ -1532,7 +1773,10 @@ function updateTestTimer() {
 
 function submitActiveTest(autoSubmitted) {
   const session = sessionById(activeSessionId);
-  if (!session || session.status !== "In progress") return;
+  if (submissionInProgress || !session || session.status !== "In progress") {
+    if (session?.status !== "In progress") notify("warning", "This assessment has already been submitted.");
+    return;
+  }
   saveActiveResponseNow();
   if (!autoSubmitted) {
     showSubmitReviewDialog();
@@ -1545,8 +1789,10 @@ function showSubmitReviewDialog() {
   const session = sessionById(activeSessionId);
   if (!session) return;
   const responsesForSession = responsesBySession(session.id);
-  const unanswered = responsesForSession.filter((response) => !isAnswered(response.answer)).length;
-  const flagged = responsesForSession.filter((response) => response.flagged).length;
+  const unansweredResponses = responsesForSession.filter((response) => !isAnswered(response.answer));
+  const flaggedResponses = responsesForSession.filter((response) => response.flagged);
+  const unanswered = unansweredResponses.length;
+  const flagged = flaggedResponses.length;
   const remaining = recoverTimeRemaining(session, new Date());
   document.querySelector("#submitReviewDialog").hidden = false;
   document.querySelector("#submitReviewDialog").innerHTML = `
@@ -1557,16 +1803,20 @@ function showSubmitReviewDialog() {
       <div><span>Flagged</span><strong>${flagged}</strong></div>
       <div><span>Time remaining</span><strong>${formatRemaining(remaining)}</strong></div>
     </div>
+    <section class="review-question-section"><h3>Unanswered questions (${unanswered})</h3><div class="submit-review-actions review-question-links">${reviewQuestionLinks(unansweredResponses) || "<span>None</span>"}</div></section>
+    <section class="review-question-section"><h3>Flagged questions (${flagged})</h3><div class="submit-review-actions review-question-links">${reviewQuestionLinks(flaggedResponses) || "<span>None</span>"}</div></section>
+    <p class="submission-warning">After submission, your responses will be locked and cannot be changed.</p>
     <div class="submit-review-actions">
-      ${responsesForSession.filter((response) => !isAnswered(response.answer) || response.flagged).slice(0, 12).map((response) => {
-        const index = activeTestPayload.questions.findIndex((question) => question.id === response.questionId);
-        return `<button type="button" data-review-jump="${index}">Q${index + 1}</button>`;
-      }).join("")}
-    </div>
-    <div class="submit-review-actions">
-      <button type="button" data-submit-review-action="return">Return to Test</button>
-      <button type="button" data-submit-review-action="confirm">Submit Test</button>
+      <button type="button" data-submit-review-action="return">Return to Test / 返回測驗</button>
+      <button type="button" data-submit-review-action="confirm">Submit and Finish / 提交並完成</button>
     </div>`;
+}
+
+function reviewQuestionLinks(responseItems) {
+  return responseItems.map((response) => {
+    const index = activeTestPayload.questions.findIndex((question) => question.id === response.questionId);
+    return `<button type="button" data-review-jump="${index}">Question ${index + 1}</button>`;
+  }).join("");
 }
 
 function handleSubmitReviewAction(event) {
@@ -1579,12 +1829,21 @@ function handleSubmitReviewAction(event) {
   }
   const action = event.target.closest("[data-submit-review-action]")?.dataset.submitReviewAction;
   if (action === "return") document.querySelector("#submitReviewDialog").hidden = true;
-  if (action === "confirm") finaliseActiveTestSubmission(false);
+  if (action === "confirm") {
+    const button = event.target.closest("[data-submit-review-action='confirm']");
+    if (submissionInProgress) return;
+    submissionInProgress = true;
+    button.disabled = true;
+    button.setAttribute("aria-disabled", "true");
+    button.textContent = "Saving submission...";
+    requestAnimationFrame(() => finaliseActiveTestSubmission(false));
+  }
 }
 
 function finaliseActiveTestSubmission(autoSubmitted) {
   const session = sessionById(activeSessionId);
   if (!session || session.status !== "In progress") {
+    submissionInProgress = false;
     notify("warning", "This session has already been submitted.");
     return;
   }
@@ -1600,6 +1859,8 @@ function finaliseActiveTestSubmission(autoSubmitted) {
   if (guardStatus) guardStatus.textContent = "Press and hold until the dashboard opens.";
   const returnButton = document.querySelector("#returnToDashboard");
   if (returnButton) returnButton.textContent = "Return to Centre Dashboard / 返回中心系統";
+  selectedCentreStudentId = null;
+  submissionInProgress = false;
   renderCentreSystem();
   notify("success", "Test submitted");
 }
@@ -1609,12 +1870,15 @@ function cancelSession(sessionId) {
   const session = sessionById(sessionId);
   session.status = "Cancelled";
   session.updatedAt = new Date().toISOString();
+  selectedCentreStudentId = null;
+  if (activeSessionId === sessionId && !document.querySelector("#testMode")?.hidden) closeTestMode("dashboard");
   persistCentreState();
   renderCentreSystem();
 }
 
 function markSubmittedSession(state, sessionId, now, autoSubmitted = false) {
   const session = state.testSessions.find((item) => item.id === sessionId);
+  if (!session || session.status !== "In progress") return false;
   const submittedAt = now.toISOString();
   const questionsForSession = getSessionQuestions(state, sessionId);
   const responsesForSession = state.studentResponses.filter((item) => item.testSessionId === sessionId);
@@ -1622,19 +1886,23 @@ function markSubmittedSession(state, sessionId, now, autoSubmitted = false) {
     const question = questionsForSession.find((item) => item.id === response.questionId);
     if (!isAnswered(response.answer)) {
       response.answer = emptyAnswerForQuestion(question);
-      response.errorCodes = ["No attempt"];
+      response.primaryErrorCode = "No attempt";
+      response.secondaryErrorCodes = [];
+      syncResponseErrorCodes(response);
     }
     if (questionRequiresStaffReview(question)) {
       const suggestion = suggestWrittenResponse(question, response.answer);
       response.suggestedMark = suggestion.suggestedMark;
       response.markingSuggestion = suggestion;
       response.markingMethod = "Suggested";
-      response.markingConfidence = suggestion.confidence;
+      response.markingConfidence = suggestion.matchQuality;
       response.markAwarded = null;
     } else {
       const marked = markObjectiveResponse(question, response.answer);
       response.markAwarded = marked.markAwarded;
-      response.errorCodes = marked.errorCodes;
+      response.primaryErrorCode = marked.errorCodes[0] || "";
+      response.secondaryErrorCodes = marked.errorCodes.slice(1);
+      syncResponseErrorCodes(response);
       response.markingMethod = "Automatic";
       response.markingConfidence = marked.confidence;
       response.markedAt = submittedAt;
@@ -1647,18 +1915,29 @@ function markSubmittedSession(state, sessionId, now, autoSubmitted = false) {
   session.status = responsesForSession.some((response) => response.markAwarded === null || response.markAwarded === undefined) ? "Needs marking" : "Marked";
   if (autoSubmitted) session.internalNote = "Auto-submitted when timer expired.";
   updateSessionScore(state, sessionId);
+  return true;
 }
 
 function recoverTimeRemaining(session, now) {
-  return Math.max(0, Math.round((new Date(session.serverDeadline) - now) / 1000));
+  if (!session?.deadlineAt || Number.isNaN(new Date(session.deadlineAt).getTime())) return 0;
+  return Math.max(0, Math.round((new Date(session.deadlineAt) - now) / 1000));
 }
 
 function renderMarkingModule() {
-  const session = activeSessionId ? sessionById(activeSessionId) : centreState.testSessions.find((item) => item.status === "Needs marking") || centreState.testSessions.find((item) => item.status === "Marked") || centreState.testSessions[0];
+  const eligibleSessions = centreState.testSessions.filter((item) => ["Needs marking", "Marked", "Report generated"].includes(item.status));
+  const filteredSessions = eligibleSessions.filter((session) => markingFilter === "All"
+    || (markingFilter === "Needs review" && session.status === "Needs marking")
+    || (markingFilter === "Marked" && ["Marked", "Report generated"].includes(session.status)));
+  const activeCandidate = activeSessionId ? eligibleSessions.find((item) => item.id === activeSessionId) : null;
+  const session = activeCandidate && filteredSessions.some((item) => item.id === activeCandidate.id) ? activeCandidate : filteredSessions[0] || null;
   activeSessionId = session?.id ?? null;
   const panel = document.querySelector("#markingPanel");
+  const queueMarkup = `<section class="marking-queue" aria-label="Marking session queue">
+    <div class="marking-filter-row">${["Needs review", "Marked", "All"].map((filter) => `<button type="button" data-marking-action="filter" data-marking-filter="${filter}" class="${markingFilter === filter ? "active" : ""}">${filter}</button>`).join("")}</div>
+    <div class="marking-queue-list">${filteredSessions.map(markingQueueItem).join("") || "<p>No sessions match this filter.</p>"}</div>
+  </section>`;
   if (!session) {
-    panel.innerHTML = "<p>No test sessions available.</p>";
+    panel.innerHTML = `${queueMarkup}<p>No submitted assessments are available for marking.</p>`;
     return;
   }
   const student = studentById(session.studentId);
@@ -1666,6 +1945,8 @@ function renderMarkingModule() {
   const reviewed = writtenResponses.filter((response) => response.markingMethod === "Staff reviewed" || response.markingMethod === "Manual override").length;
   const unreviewed = writtenResponses.length - reviewed;
   panel.innerHTML = `
+    ${queueMarkup}
+    <section class="selected-marking-session" aria-label="Selected assessment review">
     <article class="marking-card">
       <h3>${escapeHtml(student.studentName)} — ${escapeHtml(session.testName)}</h3>
       <p>Submitted: ${escapeHtml(session.submittedAt ? formatDate(session.submittedAt) : "Not submitted")} · Objective marking: ${objectiveResponsesComplete(session.id) ? "Complete" : "Pending"} · Written marking: ${reviewed}/${writtenResponses.length} reviewed</p>
@@ -1676,56 +1957,104 @@ function renderMarkingModule() {
         <button type="button" data-marking-action="generate-report" data-session-id="${session.id}" ${unreviewed ? "disabled aria-disabled=\"true\" title=\"Complete written marking before generating the report.\"" : ""}>Generate Report / 生成報告</button>
       </div>
     </article>
-    ${writtenResponses.map((response, index) => markingCard(session, response, index, writtenResponses.length)).join("") || "<p>No written responses require staff review.</p>"}`;
+    ${writtenResponses.map((response, index) => markingCard(session, response, index, writtenResponses.length)).join("") || "<p>No written responses require staff review.</p>"}
+    </section>`;
+}
+
+function markingQueueItem(session) {
+  const student = studentById(session.studentId);
+  const written = responsesBySession(session.id).filter((response) => questionRequiresStaffReview(questionForResponse(response)));
+  const reviewed = written.filter((response) => ["Staff reviewed", "Manual override"].includes(response.markingMethod)).length;
+  const markedResponses = responsesBySession(session.id).filter((response) => Number.isFinite(response.markAwarded));
+  const currentScore = round1(sum(markedResponses.map((response) => response.markAwarded)));
+  const maximumMark = sum(responsesBySession(session.id).map((response) => response.maximumMark));
+  return `<button type="button" class="marking-queue-item ${session.id === activeSessionId ? "selected" : ""}" data-marking-action="select-session" data-session-id="${session.id}">
+    <strong>${escapeHtml(student.studentName)}</strong><span>${escapeHtml(session.testName)}</span>
+    <small>Submitted ${escapeHtml(session.submittedAt ? formatDate(session.submittedAt) : "Not submitted")} · Objective ${objectiveResponsesComplete(session.id) ? "complete" : "pending"} · Written ${reviewed}/${written.length} · Score ${currentScore}/${maximumMark} · ${escapeHtml(session.status)}</small>
+  </button>`;
 }
 
 function markingCard(session, response, index, total) {
   const question = questionForResponse(response);
   const suggestion = response.markingSuggestion || suggestWrittenResponse(question, response.answer);
-  const matched = suggestion.markingPoints.filter((point) => point.status === "Met").map((point) => point.id).join(", ") || "None";
-  const uncertain = suggestion.markingPoints.filter((point) => point.status !== "Met").map((point) => point.id).join(", ") || "None";
+  const structuredChecks = question.questionType === "StructuredCalculation" && suggestion.calculationChecks ? `
+    <div class="calculation-review">
+      <div><span>Method evidence</span><strong>${escapeHtml(suggestion.calculationChecks.methodEvidence)}</strong></div>
+      <div><span>Final value check</span><strong>${escapeHtml(suggestion.calculationChecks.finalValueCheck)}</strong></div>
+      <div><span>Unit check</span><strong>${escapeHtml(suggestion.calculationChecks.unitCheck)}</strong></div>
+    </div>` : "";
+  const currentPrimary = response.primaryErrorCode || "";
   return `<article class="marking-card" data-response-id="${response.id}">
     <span class="step-label">${index + 1} of ${total} written responses</span>
     <h3>${escapeHtml(question.title)}</h3>
-    <p><strong>Question:</strong> ${escapeHtml(question.questionContent.prompt)}</p>
-    <p><strong>Mark scheme:</strong> ${escapeHtml(question.markingPoints.map((point) => `${point.description} (${point.markValue})`).join("; "))}</p>
-    <p><strong>Student answer:</strong> ${escapeHtml(displayAnswer(response.answer) || "No attempt")}</p>
-    <p><strong>Suggested mark:</strong> ${suggestion.suggestedMark}/${suggestion.maximumMark} · Confidence ${(suggestion.confidence * 100).toFixed(0)}%</p>
-    <p><strong>Matched marking points:</strong> ${escapeHtml(matched)}</p>
-    <p><strong>Uncertain marking points:</strong> ${escapeHtml(uncertain)}</p>
+    <p><strong>Question:</strong> ${formatScientificText(question.questionContent.prompt)}</p>
+    <p><strong>Student answer:</strong> ${formatScientificText(displayAnswer(response.answer) || "No attempt")}</p>
+    <div class="rule-suggestion"><strong>Rule-based marking suggestion</strong><span>Match quality: ${escapeHtml(suggestion.matchQuality)}</span><span>Staff approval required</span><span>Suggested mark: ${suggestion.suggestedMark}/${suggestion.maximumMark}</span></div>
+    ${structuredChecks}
+    <div class="marking-point-list">${suggestion.markingPoints.map(markingPointMarkup).join("")}</div>
     <label>Final mark<input type="number" min="0" max="${question.maximumMark}" step="0.5" data-mark-input="${response.id}" value="${response.markAwarded ?? suggestion.suggestedMark ?? 0}" /></label>
+    <label>Primary error classification
+      <select data-primary-error-input="${response.id}">
+        <option value="">Select primary classification</option>
+        ${ERROR_CODES.map((code) => `<option value="${escapeHtml(code)}" ${currentPrimary === code ? "selected" : ""}>${escapeHtml(code)}</option>`).join("")}
+      </select>
+    </label>
     <fieldset class="error-code-fieldset">
-      <legend>Error codes</legend>
-      ${ERROR_CODES.filter(Boolean).map((code) => `<label><input type="checkbox" data-error-code-input="${response.id}" value="${escapeHtml(code)}" ${(response.errorCodes || suggestion.suggestedErrorCodes || []).includes(code) ? "checked" : ""} /> ${escapeHtml(code)}</label>`).join("")}
+      <legend>Secondary error codes (optional)</legend>
+      ${ERROR_CODES.filter((code) => code !== "No error classification").map((code) => `<label><input type="checkbox" data-error-code-input="${response.id}" value="${escapeHtml(code)}" ${(response.secondaryErrorCodes || []).includes(code) ? "checked" : ""} /> ${escapeHtml(code)}</label>`).join("")}
     </fieldset>
     <label>Feedback<textarea rows="3" data-feedback-input="${response.id}">${escapeHtml(response.feedback || "")}</textarea></label>
     <div class="session-badges">
-      <button type="button" data-marking-action="approve" data-response-id="${response.id}">Approve Suggestion</button>
+      <button type="button" data-marking-action="approve" data-response-id="${response.id}">Use Suggested Mark</button>
       <button type="button" data-marking-action="save" data-response-id="${response.id}">Save and Next</button>
     </div>
   </article>`;
 }
 
+function markingPointMarkup(point) {
+  const met = point.status === "Met";
+  return `<div class="marking-point ${met ? "matched" : "uncertain"}">
+    <span aria-hidden="true">${met ? "✓" : "?"}</span>
+    <div><strong>${escapeHtml(point.description)} (${point.markValue} mark${point.markValue === 1 ? "" : "s"})</strong>
+      <p>${met ? "Detected evidence" : "Needs staff judgement"}${point.evidenceText ? ` · Matched phrase: “${escapeHtml(point.evidenceText)}”` : ""}</p>
+      ${!met && point.acceptedConcepts?.length ? `<small>Accepted concepts: ${escapeHtml(point.acceptedConcepts.join("; "))}</small>` : ""}
+      <small class="internal-metadata">${escapeHtml(point.id)}</small>
+    </div>
+  </div>`;
+}
+
 function handleMarkInput(event) {
   const markInput = event.target.closest("[data-mark-input]");
   const feedbackInput = event.target.closest("[data-feedback-input]");
+  const primaryInput = event.target.closest("[data-primary-error-input]");
   const errorInput = event.target.closest("[data-error-code-input]");
-  if (!markInput && !feedbackInput && !errorInput) return;
-  const responseId = markInput?.dataset.markInput || feedbackInput?.dataset.feedbackInput || errorInput?.dataset.errorCodeInput;
+  if (!markInput && !feedbackInput && !primaryInput && !errorInput) return;
+  const responseId = markInput?.dataset.markInput || feedbackInput?.dataset.feedbackInput || primaryInput?.dataset.primaryErrorInput || errorInput?.dataset.errorCodeInput;
   const response = centreState.studentResponses.find((item) => item.id === responseId);
   if (!response) return;
   if (markInput) response.pendingMark = clamp(number(markInput.value) ?? 0, 0, response.maximumMark);
   if (feedbackInput) response.feedback = feedbackInput.value;
+  if (primaryInput) response.primaryErrorCode = primaryInput.value;
   if (errorInput) {
     const checked = [...document.querySelectorAll(`[data-error-code-input="${response.id}"]:checked`)].map((input) => input.value);
-    response.errorCodes = checked;
+    response.secondaryErrorCodes = checked;
   }
+  syncResponseErrorCodes(response);
 }
 
 function handleMarkingAction(event) {
   const button = event.target.closest("[data-marking-action]");
   if (!button) return;
   const action = button.dataset.markingAction;
+  if (action === "filter") {
+    markingFilter = button.dataset.markingFilter;
+    activeSessionId = null;
+    renderMarkingModule();
+  }
+  if (action === "select-session") {
+    activeSessionId = button.dataset.sessionId;
+    renderMarkingModule();
+  }
   if (action === "approve") approveWrittenResponse(button.dataset.responseId);
   if (action === "save") saveWrittenResponse(button.dataset.responseId);
   if (action === "finish") finishMarking(button.dataset.sessionId);
@@ -1736,32 +2065,43 @@ function approveWrittenResponse(responseId) {
   const response = centreState.studentResponses.find((item) => item.id === responseId);
   const question = questionForResponse(response);
   const suggestion = response.markingSuggestion || suggestWrittenResponse(question, response.answer);
-  response.markAwarded = suggestion.suggestedMark;
-  response.errorCodes = response.errorCodes?.length ? response.errorCodes : suggestion.suggestedErrorCodes;
-  response.markingMethod = "Staff reviewed";
-  response.markingConfidence = suggestion.confidence;
-  response.markedAt = new Date().toISOString();
-  response.updatedAt = response.markedAt;
-  finishMarkingIfComplete(response.testSessionId);
-  persistCentreState();
-  renderMarkingModule();
-  scrollToNextUnreviewed(response.testSessionId);
-  notify("success", "Suggested mark approved");
+  response.pendingMark = suggestion.suggestedMark;
+  if (!response.primaryErrorCode && suggestion.suggestedErrorCodes?.[0] === "No attempt") response.primaryErrorCode = "No attempt";
+  if (suggestion.suggestedMark < response.maximumMark && !response.primaryErrorCode) {
+    persistCentreState();
+    renderMarkingModule();
+    notify("warning", "Suggested mark applied. Select a primary error classification before saving.");
+    return;
+  }
+  saveWrittenResponse(responseId);
 }
 
 function saveWrittenResponse(responseId) {
   const response = centreState.studentResponses.find((item) => item.id === responseId);
-  response.markAwarded = clamp(response.pendingMark ?? response.markAwarded ?? 0, 0, response.maximumMark);
+  const question = questionForResponse(response);
+  const suggestion = response.markingSuggestion || suggestWrittenResponse(question, response.answer);
+  const finalMark = clamp(response.pendingMark ?? response.markAwarded ?? suggestion.suggestedMark, 0, response.maximumMark);
+  if (finalMark < response.maximumMark && !response.primaryErrorCode) {
+    notify("error", "Select a primary error classification or No error classification before saving a non-full mark.");
+    document.querySelector(`[data-primary-error-input="${response.id}"]`)?.focus();
+    return false;
+  }
+  response.markAwarded = finalMark;
   response.markingMethod = "Staff reviewed";
-  response.markingConfidence = 1;
+  response.markingConfidence = suggestion.matchQuality;
   response.markedAt = new Date().toISOString();
   response.updatedAt = response.markedAt;
-  if (!response.errorCodes?.length && response.markAwarded < response.maximumMark) response.errorCodes = ["Incomplete explanation"];
+  if (response.markAwarded === response.maximumMark) {
+    response.primaryErrorCode = "";
+    response.secondaryErrorCodes = [];
+  }
+  syncResponseErrorCodes(response);
   finishMarkingIfComplete(response.testSessionId);
   persistCentreState();
   renderMarkingModule();
   scrollToNextUnreviewed(response.testSessionId);
   notify("success", "Saved");
+  return true;
 }
 
 function finishMarking(sessionId) {
@@ -1771,10 +2111,18 @@ function finishMarking(sessionId) {
       <p>${missing.length} written responses still require review.</p>
       <div class="submit-review-actions">
         <button type="button" data-incomplete-marking-action="continue">Continue Marking</button>
-        <button type="button" data-incomplete-marking-action="cancel">Cancel</button>
+        <button type="button" data-incomplete-marking-action="leave">Leave Marking Incomplete</button>
       </div>`);
-    document.querySelector("[data-incomplete-marking-action='continue']")?.addEventListener("click", () => closeStaffDrawer());
-    document.querySelector("[data-incomplete-marking-action='cancel']")?.addEventListener("click", () => closeStaffDrawer());
+    document.querySelector("[data-incomplete-marking-action='continue']")?.addEventListener("click", () => {
+      closeStaffDrawer();
+      scrollToNextUnreviewed(sessionId);
+    });
+    document.querySelector("[data-incomplete-marking-action='leave']")?.addEventListener("click", () => {
+      closeStaffDrawer();
+      activeSessionId = null;
+      showCentreModule("sessions");
+      notify("information", "Marking remains incomplete and can be resumed from Assessment Records.");
+    });
     notify("warning", `Marking is incomplete. ${missing.length} responses still require review.`);
     return;
   }
@@ -1801,18 +2149,21 @@ function scrollToNextUnreviewed(sessionId) {
 }
 
 function generateReportForSession(sessionId) {
-  const unmarked = responsesBySession(sessionId).filter((response) => response.markAwarded === null || response.markAwarded === undefined);
-  if (unmarked.length) {
-    openStaffDrawer("Cannot Generate Report", "", `<p>${unmarked.length} written responses still require review. Complete them before generating the report.</p>`);
+  const session = sessionById(sessionId);
+  const unmarked = responsesBySession(sessionId).filter((response) => !Number.isFinite(response.markAwarded));
+  if (unmarked.length || !isSessionFullyMarked(centreState, session)) {
+    openStaffDrawer("Cannot Generate Report", "", `<p>${unmarked.length} responses still require review. Complete them before generating the report.</p>`);
     notify("warning", "Complete written marking before generating the report");
     return;
   }
-  const snapshot = buildReportSnapshotFromState(centreState, sessionId, "Draft");
-  const existingIndex = centreState.reportSnapshots.findIndex((item) => item.testSessionId === sessionId);
-  if (existingIndex >= 0 && centreState.reportSnapshots[existingIndex].status === "Final" && !window.confirm("A final report already exists. Create a new draft version?")) return;
-  if (existingIndex >= 0 && centreState.reportSnapshots[existingIndex].status !== "Final") centreState.reportSnapshots[existingIndex] = snapshot;
-  else centreState.reportSnapshots.unshift(snapshot);
-  const session = sessionById(sessionId);
+  const existing = centreState.reportSnapshots.filter((item) => item.testSessionId === sessionId).sort((a, b) => (b.versionNumber || 1) - (a.versionNumber || 1));
+  if (existing.length && !window.confirm("A report version already exists. Create a new draft version from the latest reviewed evidence?")) return;
+  const latest = existing[0] || null;
+  const snapshot = buildReportSnapshotFromState(centreState, sessionId, "Draft", {
+    versionNumber: latest ? (latest.versionNumber || 1) + 1 : 1,
+    parentReportId: latest?.id || ""
+  });
+  centreState.reportSnapshots.unshift(snapshot);
   session.status = "Report generated";
   session.reportGeneratedAt = snapshot.createdAt;
   session.updatedAt = snapshot.createdAt;
@@ -1822,7 +2173,7 @@ function generateReportForSession(sessionId) {
   notify("success", "Report generated");
 }
 
-function buildReportSnapshotFromState(state, sessionId, status = "Draft") {
+function buildReportSnapshotFromState(state, sessionId, status = "Draft", versionMeta = {}) {
   const session = state.testSessions.find((item) => item.id === sessionId);
   const evidenceObject = buildCentreReportEvidence(state, sessionId);
   const narrative = generateParentReport(evidenceObject);
@@ -1838,25 +2189,56 @@ function buildReportSnapshotFromState(state, sessionId, status = "Draft") {
     generatedNarrative: narrative,
     editedNarrative: "",
     status,
+    versionNumber: Number(versionMeta.versionNumber || 1),
+    parentReportId: versionMeta.parentReportId || "",
+    finalisedAt: status === "Final" ? now : "",
+    supersededByReportId: "",
     createdAt: now,
     updatedAt: now
   };
 }
 
+function isSessionFullyMarked(state, session) {
+  if (!session) return false;
+  const sessionQuestions = getSessionQuestions(state, session.id);
+  const responsesForSession = state.studentResponses.filter((response) => response.testSessionId === session.id);
+  return responsesForSession.length > 0
+    && responsesForSession.length === sessionQuestions.length
+    && responsesForSession.every((response) => Number.isFinite(response.markAwarded)
+      && response.markAwarded >= 0
+      && response.markAwarded <= response.maximumMark);
+}
+
 function buildCentreReportEvidence(state, sessionId) {
   const latestSession = state.testSessions.find((item) => item.id === sessionId);
+  if (!latestSession) throw new Error("The selected assessment session could not be found.");
   const student = state.students.find((item) => item.studentId === latestSession.studentId);
-  const sessions = state.testSessions
-    .filter((session) => session.studentId === latestSession.studentId && session.subjectName === latestSession.subjectName && ["Submitted", "Needs marking", "Marked", "Report generated"].includes(session.status))
+  const relatedSessions = state.testSessions.filter((session) => session.studentId === latestSession.studentId && session.subjectName === latestSession.subjectName);
+  const sessions = relatedSessions
+    .filter((session) => ["Marked", "Report generated"].includes(session.status) && isSessionFullyMarked(state, session))
     .sort((a, b) => new Date(a.submittedAt || a.startedAt) - new Date(b.submittedAt || b.startedAt));
+  if (!sessions.some((session) => session.id === latestSession.id)) throw new Error("Reports can only be generated from a fully marked assessment.");
   const inputs = centreSessionsToReportInputs(state, student, sessions);
+  const reportDate = new Date(latestSession.markedAt || latestSession.submittedAt || latestSession.startedAt || latestSession.createdAt);
+  if (Number.isNaN(reportDate.getTime())) throw new Error("The report date is invalid.");
   const report = buildStudentReportEvidence(inputs.assessments, inputs.questions, inputs.responses, {
     studentName: student.studentName,
     subject: latestSession.subjectName,
-    reportDate: new Date(latestSession.submittedAt || latestSession.startedAt)
+    reportDate
   });
   report.assessmentHistory = report.overallProgress.assessments;
   report.latestSession = latestSession;
+  report.responseDetails = inputs.responses.map((response) => ({
+    assessmentId: response.assessmentId,
+    questionId: response.questionId,
+    markAwarded: response.markAwarded,
+    maximumMark: response.maximumMark,
+    primaryErrorCode: response.primaryErrorCode,
+    secondaryErrorCodes: [...response.secondaryErrorCodes]
+  }));
+  report.pendingMarkingSessions = relatedSessions
+    .filter((session) => session.status !== "Cancelled" && (!["Marked", "Report generated"].includes(session.status) || !isSessionFullyMarked(state, session)))
+    .map((session) => ({ id: session.id, testName: session.testName, status: session.status, date: session.submittedAt || session.createdAt }));
   report.dataQuality.reportSource = "Centre test session records";
   return report;
 }
@@ -1879,7 +2261,7 @@ function centreSessionsToReportInputs(state, student, sessions) {
       assessmentName: session.testName,
       assessmentDate: toIsoDate(session.submittedAt || session.startedAt),
       assessmentType: template.testType,
-      maximumMark: templateSummary(state, template.id).maximumMark,
+      maximumMark: sum(sessionQuestions.map((question) => question.maximumMark)),
       durationMinutes: template.timeLimitMinutes
     });
     for (const question of sessionQuestions) {
@@ -1907,10 +2289,12 @@ function centreSessionsToReportInputs(state, student, sessions) {
         studentId: student.studentId,
         questionId: response.questionId,
         studentAnswer: displayAnswer(response.answer),
-        markAwarded: response.markAwarded ?? 0,
+        markAwarded: response.markAwarded,
         maximumMark: response.maximumMark,
         markingMethod: response.markingMethod,
-        errorCode: response.errorCodes?.[0] || "",
+        errorCode: response.primaryErrorCode || "",
+        primaryErrorCode: response.primaryErrorCode || "",
+        secondaryErrorCodes: [...(response.secondaryErrorCodes || [])],
         tutorFeedback: response.feedback
       });
     }
@@ -1920,10 +2304,10 @@ function centreSessionsToReportInputs(state, student, sessions) {
 
 function renderEvidenceSnapshot(report, narrative, snapshot = null) {
   evidence = report;
-  document.querySelector("#pageTitle").textContent = `${report.student.name} - ${report.subject.name} Report`;
+  document.querySelector("#pageTitle").textContent = `${report.student.name} — ${report.subject.name} Performance Report`;
   renderSummary(report);
   renderProgressChart(report);
-  renderRadar(report.topicProfile, "Topic Mastery");
+  renderRadar(report.topicProfile, "Topic Performance");
   renderPrintRadars(report);
   renderGradeEvidence(report);
   renderTopicMap(report);
@@ -1932,15 +2316,19 @@ function renderEvidenceSnapshot(report, narrative, snapshot = null) {
   renderErrorPatterns(report);
   renderDataQuality(report);
   elements.reportText.value = narrative || generateParentReport(report);
+  updateReportNarrativeMirror();
   if (snapshot) {
     activeReportSnapshotId = snapshot.id;
-    document.querySelector("#selectedReportMeta").innerHTML = `<span>Selected report</span><p>${escapeHtml(snapshot.subjectName)} · ${escapeHtml(snapshot.status)} · ${formatDate(snapshot.createdAt)} · ${escapeHtml(snapshot.id)}</p>`;
+    document.querySelector("#selectedReportMeta").innerHTML = `<span>Selected report</span><p>${escapeHtml(snapshot.subjectName)} · Version ${snapshot.versionNumber || 1} · ${escapeHtml(snapshot.status)} · ${formatDate(snapshot.finalisedAt || snapshot.updatedAt || snapshot.createdAt)}</p>`;
+    updateReportEditingState(snapshot);
+    document.querySelector("#printableReport").hidden = activeCentreModule !== "reports";
   }
 }
 
 function openReportSnapshot(snapshotId) {
   const snapshot = centreState.reportSnapshots.find((report) => report.id === snapshotId);
   if (!snapshot) return;
+  activeReportSnapshotId = snapshot.id;
   showCentreModule("reports");
   renderEvidenceSnapshot(snapshot.evidenceJson, snapshot.editedNarrative || snapshot.generatedNarrative, snapshot);
   document.querySelector("#printableReport")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1951,6 +2339,10 @@ function saveActiveReportDraft() {
   const snapshot = centreState.reportSnapshots.find((report) => report.id === activeReportSnapshotId);
   if (!snapshot) {
     notify("warning", "Open a report snapshot before saving.");
+    return;
+  }
+  if (snapshot.status === "Final") {
+    notify("warning", "Final reports are locked. Create a revised version to edit the narrative.");
     return;
   }
   snapshot.editedNarrative = elements.reportText.value;
@@ -1967,12 +2359,60 @@ function finaliseActiveReport() {
     notify("warning", "Open a report snapshot before finalising.");
     return;
   }
-  snapshot.editedNarrative = elements.reportText.value;
-  snapshot.status = "Final";
-  snapshot.updatedAt = new Date().toISOString();
+  if (snapshot.status === "Final") {
+    notify("information", "This report version is already final.");
+    return;
+  }
+  finaliseReportSnapshot(centreState, snapshot.id, elements.reportText.value, new Date());
   persistCentreState();
   renderReportsModule();
+  updateReportEditingState(snapshot);
   notify("success", "Report finalised");
+}
+
+function createRevisedReportVersion() {
+  const original = centreState.reportSnapshots.find((report) => report.id === activeReportSnapshotId);
+  if (!original || original.status !== "Final") {
+    notify("warning", "Open a final report before creating a revised version.");
+    return;
+  }
+  const revision = createRevisedReportSnapshot(centreState, original.id, new Date());
+  persistCentreState();
+  renderReportsModule();
+  openReportSnapshot(revision.id);
+  notify("success", `Report version ${revision.versionNumber} created as a draft`);
+}
+
+function finaliseReportSnapshot(state, snapshotId, narrative, now = new Date()) {
+  const snapshot = state.reportSnapshots.find((report) => report.id === snapshotId);
+  if (!snapshot || snapshot.status === "Final") return null;
+  snapshot.editedNarrative = narrative;
+  snapshot.status = "Final";
+  snapshot.finalisedAt = now.toISOString();
+  snapshot.updatedAt = snapshot.finalisedAt;
+  const parent = state.reportSnapshots.find((report) => report.id === snapshot.parentReportId && report.status === "Final");
+  if (parent) parent.supersededByReportId = snapshot.id;
+  return snapshot;
+}
+
+function createRevisedReportSnapshot(state, originalId, now = new Date()) {
+  const original = state.reportSnapshots.find((report) => report.id === originalId);
+  if (!original || original.status !== "Final") return null;
+  const timestamp = now.toISOString();
+  const nextVersion = Math.max(0, ...state.reportSnapshots.filter((report) => report.testSessionId === original.testSessionId).map((report) => Number(report.versionNumber || 1))) + 1;
+  const revision = {
+    ...structuredCloneSafe(original),
+    id: makeId("REPORT"),
+    status: "Draft",
+    versionNumber: nextVersion,
+    parentReportId: original.id,
+    finalisedAt: "",
+    supersededByReportId: "",
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+  state.reportSnapshots.unshift(revision);
+  return revision;
 }
 
 function revertActiveReport() {
@@ -1981,20 +2421,42 @@ function revertActiveReport() {
     notify("warning", "Open a report snapshot before reverting.");
     return;
   }
+  if (snapshot.status === "Final") {
+    notify("warning", "Final reports are locked. Create a revised version to make changes.");
+    return;
+  }
   if (!window.confirm("Revert the visible narrative to the generated version?")) return;
   snapshot.editedNarrative = "";
   snapshot.updatedAt = new Date().toISOString();
   elements.reportText.value = snapshot.generatedNarrative;
+  updateReportNarrativeMirror();
   persistCentreState();
   notify("success", "Report reverted to generated version");
 }
 
 function preserveActiveReportEdit() {
   const snapshot = centreState?.reportSnapshots.find((report) => report.id === activeReportSnapshotId);
-  if (!snapshot) return;
+  if (!snapshot || snapshot.status === "Final") return;
   snapshot.editedNarrative = elements.reportText.value;
   snapshot.updatedAt = new Date().toISOString();
   persistCentreState();
+  updateReportNarrativeMirror();
+}
+
+function updateReportNarrativeMirror() {
+  const mirror = document.querySelector("#reportPrintNarrative");
+  if (mirror) mirror.textContent = elements.reportText?.value || "";
+}
+
+function updateReportEditingState(snapshot) {
+  const final = snapshot?.status === "Final";
+  if (elements.reportText) elements.reportText.readOnly = final;
+  ["#saveReportDraft", "#finaliseReport", "#revertReport"].forEach((selector) => {
+    const button = document.querySelector(selector);
+    if (button) button.hidden = final;
+  });
+  const revisionButton = document.querySelector("#createReportRevision");
+  if (revisionButton) revisionButton.hidden = !final;
 }
 
 function exportPdfFallback() {
@@ -2003,9 +2465,13 @@ function exportPdfFallback() {
 }
 
 function markObjectiveResponse(question, answer) {
+  return DemoLocalAnswerProvider.markObjectiveResponse(question, answer);
+}
+
+function markObjectiveResponseLocal(question, answer) {
   if (question.questionType === "MCQ") return markMcq(question, answer);
   if (question.questionType === "TrueFalse") return markTrueFalse(question, answer);
-  if (question.questionType === "Numerical" || question.questionType === "StructuredCalculation") return markNumerical(question, answer);
+  if (question.questionType === "Numerical") return markNumerical(question, answer);
   return { markAwarded: null, confidence: 0, errorCodes: [], requiresStaffReview: true };
 }
 
@@ -2048,24 +2514,61 @@ function markNumerical(question, answer) {
 function suggestWrittenResponse(question, answer) {
   const answerText = displayAnswer(answer).toLowerCase();
   const markingPoints = question.markingPoints.map((point) => {
-    const matched = point.acceptedConcepts?.some((concept) => answerText.includes(String(concept).toLowerCase()));
+    const evidenceText = point.acceptedConcepts?.find((concept) => answerText.includes(String(concept).toLowerCase())) || "";
+    const matched = Boolean(evidenceText);
     return {
       id: point.id,
+      description: point.description,
+      markValue: point.markValue,
+      acceptedConcepts: [...(point.acceptedConcepts || [])],
       status: matched ? "Met" : answerText ? "Uncertain" : "Not met",
-      evidenceText: matched ? point.acceptedConcepts.find((concept) => answerText.includes(String(concept).toLowerCase())) : ""
+      evidenceText
     };
   });
-  const suggestedMark = clamp(sum(markingPoints.map((point, index) => point.status === "Met" ? question.markingPoints[index].markValue : 0)), 0, question.maximumMark);
-  const uncertain = markingPoints.some((point) => point.status === "Uncertain");
-  const confidence = !answerText ? 1 : uncertain ? 0.62 : 0.9;
+  let suggestedMark = clamp(sum(markingPoints.map((point, index) => point.status === "Met" ? question.markingPoints[index].markValue : 0)), 0, question.maximumMark);
+  const matchedCount = markingPoints.filter((point) => point.status === "Met").length;
+  const matchQuality = !answerText ? "No answer" : matchedCount === markingPoints.length && markingPoints.length ? "High" : matchedCount ? "Medium" : "Low";
+  const calculationChecks = question.questionType === "StructuredCalculation" ? buildStructuredCalculationChecks(question, answer, markingPoints) : null;
+  if (calculationChecks) {
+    const methodPointCount = Math.max(1, markingPoints.length - 1);
+    const methodMarks = sum(markingPoints.slice(0, methodPointCount).map((point) => point.status === "Met" ? point.markValue : 0));
+    const finalPoint = markingPoints.at(-1);
+    const finalMarks = calculationChecks.valueCorrect && calculationChecks.unitCorrect ? finalPoint?.markValue || 0 : 0;
+    suggestedMark = clamp(methodMarks + finalMarks, 0, question.maximumMark);
+  }
   return {
     suggestedMark,
     maximumMark: question.maximumMark,
-    confidence,
+    matchQuality,
     markingPoints,
     suggestedErrorCodes: !answerText ? ["No attempt"] : suggestedMark < question.maximumMark ? ["Incomplete explanation"] : [],
-    requiresStaffReview: confidence < 0.85 || uncertain
+    calculationChecks,
+    requiresStaffReview: true
   };
+}
+
+function buildStructuredCalculationChecks(question, answer, markingPoints) {
+  const structured = typeof answer === "object" && answer ? answer : {};
+  const finalValue = parseNumberAndUnit(String(structured.finalAnswer || ""));
+  const expected = parseNumberAndUnit(String(question.correctAnswer || ""));
+  const tolerance = Number(question.numericalTolerance || 0);
+  const valueCorrect = finalValue.value !== null && expected.value !== null && Math.abs(finalValue.value - expected.value) <= tolerance;
+  const submittedUnit = normaliseAnswer(structured.unit);
+  const expectedUnit = normaliseAnswer(question.requiredUnit || expected.unit);
+  const unitCorrect = Boolean(submittedUnit) && (!expectedUnit || submittedUnit === expectedUnit);
+  const methodPoints = markingPoints.filter((point, index) => index < Math.max(1, markingPoints.length - 1));
+  return {
+    valueCorrect,
+    unitCorrect,
+    methodEvidence: methodPoints.some((point) => point.status === "Met") ? "Some method evidence detected; staff must judge the working." : "No exact method point detected; staff must inspect the working.",
+    finalValueCheck: valueCorrect ? "Final numerical value matches." : "Final numerical value does not match or is missing.",
+    unitCheck: unitCorrect ? "Required unit matches." : expectedUnit ? `Expected unit: ${question.requiredUnit || expected.unit}.` : "No required unit configured."
+  };
+}
+
+function syncResponseErrorCodes(response) {
+  response.secondaryErrorCodes = Array.isArray(response.secondaryErrorCodes) ? unique(response.secondaryErrorCodes.filter(Boolean)) : [];
+  response.errorCodes = [response.primaryErrorCode, ...response.secondaryErrorCodes].filter(Boolean);
 }
 
 function normaliseTrueFalse(value) {
@@ -2086,6 +2589,18 @@ function upsertStudentResponse(existingResponses, response) {
 }
 
 function buildTestModePayload(state, sessionId) {
+  return DemoLocalAnswerProvider.getStudentQuestionPayload(state, sessionId);
+}
+
+function getStudentQuestionPayload(state, sessionId) {
+  return DemoLocalAnswerProvider.getStudentQuestionPayload(state, sessionId);
+}
+
+function getStaffMarkingData(state, sessionId) {
+  return DemoLocalAnswerProvider.getStaffMarkingData(state, sessionId);
+}
+
+function buildLocalStudentQuestionPayload(state, sessionId) {
   const session = state.testSessions.find((item) => item.id === sessionId);
   const student = state.students.find((item) => item.studentId === session.studentId);
   const template = state.testTemplates.find((item) => item.id === session.testTemplateId);
@@ -2096,7 +2611,6 @@ function buildTestModePayload(state, sessionId) {
     id: question.id,
     sectionTitle: question.sectionTitle || sectionTitleByQuestion.get(question.id) || question.section || "",
     section: question.section,
-    title: question.title,
     questionContent: question.questionContent,
     questionType: question.questionType,
     maximumMark: question.maximumMark,
@@ -2107,8 +2621,18 @@ function buildTestModePayload(state, sessionId) {
     student: { studentId: student.studentId, displayName: student.studentName.split(" ")[0] },
     testName: template.name,
     instructions: template.instructions,
-    serverDeadline: session.serverDeadline,
+    deadlineAt: session.deadlineAt,
     questions: questionsForTest
+  };
+}
+
+function buildLocalStaffMarkingData(state, sessionId) {
+  const session = state.testSessions.find((item) => item.id === sessionId);
+  if (!session) return null;
+  return {
+    session: structuredCloneSafe(session),
+    questions: getSessionQuestions(state, sessionId).map((question) => structuredCloneSafe(question)),
+    responses: state.studentResponses.filter((response) => response.testSessionId === sessionId).map((response) => structuredCloneSafe(response))
   };
 }
 
@@ -2259,8 +2783,8 @@ function displayAnswer(answer) {
 
 function normaliseCentreErrorCode(value) {
   return {
-    "Calculation method": "Calculation method",
-    "Careless error": "Careless error"
+    "Calculation method": "Incorrect calculation method",
+    "Careless error": "Other"
   }[value] || value || "";
 }
 
@@ -2293,7 +2817,7 @@ function questionForResponse(response) {
 }
 
 function getUnfinishedSession(state) {
-  return state.testSessions.find((session) => session.status === "In progress" && recoverTimeRemaining(session, new Date()) > 0);
+  return state.testSessions.find((session) => ["Prepared", "In progress"].includes(session.status));
 }
 
 function lastUsedLabel(templateId) {
@@ -2304,6 +2828,7 @@ function lastUsedLabel(templateId) {
 function sessionStatusClass(status) {
   if (status === "Report generated" || status === "Marked") return "status-strong";
   if (status === "Needs marking" || status === "Submitted") return "status-watch";
+  if (status === "Prepared" || status === "In progress") return "status-good";
   if (status === "Cancelled") return "status-priority";
   return "status-good";
 }
@@ -2428,11 +2953,10 @@ function render() {
 
   evidence = buildStudentReportEvidence(assessments, questions, responses, { studentName, subject, reportDate: new Date() });
   elements.qualificationSelect.value = evidence.subject.qualification || "IGCSE";
-  document.querySelector("#pageTitle").textContent = `${evidence.student.name} - ${evidence.subject.name} Report`;
 
   renderSummary(evidence);
   renderProgressChart(evidence);
-  renderRadar(evidence.topicProfile, "Topic Mastery");
+  renderRadar(evidence.topicProfile, "Topic Performance");
   renderPrintRadars(evidence);
   renderGradeEvidence(evidence);
   renderTopicMap(evidence);
@@ -2450,7 +2974,7 @@ function renderRadarOnly() {
     : radarMode === "challenge"
       ? evidence.challengeAdjustedTopicProfile
       : evidence.topicProfile;
-  const label = radarMode === "question" ? "Question Type" : radarMode === "challenge" ? "Challenge-adjusted" : "Topic Mastery";
+  const label = radarMode === "question" ? "Question Type" : radarMode === "challenge" ? "Challenge-weighted View" : "Topic Performance";
   renderRadar(profile, label);
 }
 
@@ -2461,7 +2985,7 @@ function renderSummary(report) {
     ? `${latest.markAwarded}/${latest.maximumMark} on ${formatDate(latest.date)} - ${latest.attemptedQuestions}/${latest.totalQuestions} attempted`
     : "No assessment data";
   const change = report.overallProgress.latestChange;
-  document.querySelector("#weeklyChange").textContent = change === null ? "--" : `${change >= 0 ? "+" : ""}${Math.round(change)} pts`;
+  document.querySelector("#weeklyChange").textContent = change === null ? "Baseline established" : `${change >= 0 ? "+" : ""}${Math.round(change)} pts`;
   document.querySelector("#estimatedGrade").textContent = report.gradeEvidence.message;
   document.querySelector("#gradeMeta").textContent = "Safeguarded grade evidence";
   document.querySelector("#focusArea").textContent = report.priorities[0]?.label ?? "Monitor evidence";
@@ -2525,10 +3049,10 @@ function renderProgressChart(report) {
 }
 
 function renderRadar(profile, modeLabel) {
-  document.querySelector("#radarHeading").textContent = `Ability Radar: ${modeLabel}`;
-  document.querySelector("#radarDescription").textContent = modeLabel === "Topic Mastery"
-    ? "Ordinary mark-weighted topic mastery. This is the main parent-facing score."
-    : modeLabel === "Challenge-adjusted"
+  document.querySelector("#radarHeading").textContent = `Performance Profile: ${modeLabel}`;
+  document.querySelector("#radarDescription").textContent = modeLabel === "Topic Performance"
+    ? "Mark-weighted performance by assessed topic."
+    : modeLabel === "Challenge-weighted View"
       ? "This view gives slightly greater influence to harder questions and should be interpreted alongside ordinary topic mastery and evidence volume."
       : "Evidence-weighted performance by question format.";
   document.querySelectorAll("#radarModeControls button").forEach((button) => {
@@ -2539,7 +3063,7 @@ function renderRadar(profile, modeLabel) {
   radarChart = createRadarChart(document.querySelector("#radarChart"), profile, modeLabel);
   const weakest = profile.find((item) => item.status === "Priority" || item.status === "Possible priority" || item.status === "Developing") ?? profile[0];
   document.querySelector("#topicDetail").innerHTML = weakest
-    ? `<span>${modeLabel} Focus</span><strong>${escapeHtml(weakest.label)} - ${Math.round(weakest.mastery)}%</strong><p>Mastery: ${Math.round(weakest.rawMastery ?? weakest.mastery)}%. Challenge-adjusted: ${Math.round(weakest.challengeAdjustedScore ?? weakest.mastery)}%. Evidence: ${escapeHtml(weakest.marksAwarded)}/${escapeHtml(weakest.marksAvailable)} marks, ${plural(weakest.questionCount, "question")}, ${plural(weakest.assessmentCount, "assessment")}. Confidence: ${escapeHtml(weakest.confidence)}.</p>`
+    ? `<span>${modeLabel} Focus</span><strong>${escapeHtml(weakest.label)} - ${Math.round(weakest.mastery)}%</strong><p>Performance: ${Math.round(weakest.rawMastery ?? weakest.mastery)}%. Challenge-weighted: ${Math.round(weakest.challengeAdjustedScore ?? weakest.mastery)}%. Evidence: ${escapeHtml(weakest.marksAwarded)}/${escapeHtml(weakest.marksAvailable)} marks, ${plural(weakest.questionCount, "question")}, ${plural(weakest.assessmentCount, "assessment")}. Confidence: ${escapeHtml(weakest.confidence)}.</p>`
     : "";
 }
 
@@ -2588,8 +3112,14 @@ function renderGradeEvidence(report) {
       options: chartOptions({ y: { min: 0, max: 100, title: "Score %" }, x: { title: "Assessment date" } })
     });
   }
+  const assessmentCount = report.dataQuality.assessmentCount;
+  const assessmentNote = assessmentCount === 1
+    ? "This is a baseline result. Longer-term comparisons and grade predictions are not reported."
+    : assessmentCount === 2
+      ? "A repeated pattern may be emerging, but more assessments are needed before a trend is reported."
+      : report.forecastEvidence.message;
   container.innerHTML = latest
-    ? `<div class="boundary-summary"><div><span>Latest mark</span><strong>${latest.markAwarded}/${latest.maximumMark}</strong></div><div><span>Completion</span><strong>${Math.round(latest.completionRate)}%</strong></div><div><span>Grade</span><strong>${escapeHtml(report.gradeEvidence.message)}</strong></div></div><p class="boundary-target">${escapeHtml(report.forecastEvidence.message)}</p>`
+    ? `<div class="boundary-summary"><div><span>Latest mark</span><strong>${latest.markAwarded}/${latest.maximumMark}</strong></div><div><span>Completion</span><strong>${Math.round(latest.completionRate)}%</strong></div><div><span>Evidence state</span><strong>${escapeHtml(report.gradeEvidence.message)}</strong></div></div><p class="boundary-target">${escapeHtml(assessmentNote)}</p>`
     : "";
   document.querySelector("#performanceAnnotations").innerHTML = report.strengths.slice(0, 1).concat(report.priorities.slice(0, 1)).map((item) =>
     `<div class="annotation-card"><span>${item.type}</span><strong>${escapeHtml(item.label)}</strong><p>${Math.round(item.mastery)}%, ${escapeHtml(item.confidence)}.</p></div>`
@@ -2638,8 +3168,8 @@ function renderDifficultyPanel(report) {
 function renderErrorPatterns(report) {
   document.querySelector("#errorPatternPanel").innerHTML = `
     <div class="table-wrap"><table class="difficulty-table">
-      <thead><tr><th>Error pattern</th><th>Marks lost</th><th>Recommendation</th></tr></thead>
-      <tbody>${report.errorPatterns.map((item) => `<tr><td><strong>${escapeHtml(item.errorCode)}</strong></td><td>${item.lostMarks}</td><td>${escapeHtml(item.recommendation)}</td></tr>`).join("") || `<tr><td colspan="3">No repeated error pattern has enough evidence yet.</td></tr>`}</tbody>
+      <thead><tr><th>Primary pattern</th><th>Marks lost</th><th>Responses</th><th>Assessments</th><th>Affected topics</th><th>Recommendation</th></tr></thead>
+      <tbody>${report.errorPatterns.map((item) => `<tr><td><strong>${escapeHtml(item.errorCode)}</strong></td><td>${item.lostMarks}</td><td>${item.responseCount}</td><td>${item.assessmentCount}</td><td>${escapeHtml(item.affectedTopics.join(", ") || "—")}</td><td>${escapeHtml(item.recommendation)}</td></tr>`).join("") || `<tr><td colspan="6">No repeated error pattern has enough evidence yet.</td></tr>`}</tbody>
     </table></div>`;
 }
 
@@ -2653,12 +3183,13 @@ function renderDataQuality(report) {
       <div><span>Missing answers</span><strong>${report.dataQuality.missingResponses}</strong></div>
       <div><span>Overall confidence</span><strong>${escapeHtml(report.dataQuality.overallConfidence)}</strong></div>
     </div>
-    <p class="boundary-target">${escapeHtml(report.dataQuality.validationSummary)}</p>`;
+    <p class="boundary-target">${escapeHtml(report.dataQuality.validationSummary)}</p>
+    ${report.pendingMarkingSessions?.length ? `<div class="pending-evidence"><strong>Pending marking</strong><p>${report.pendingMarkingSessions.map((session) => `${escapeHtml(session.testName)} (${escapeHtml(session.status)})`).join("; ")}. These assessments are excluded from all report calculations.</p></div>` : ""}`;
 }
 
 function profileTable(profile) {
   return `
-    <thead><tr><th>Topic</th><th>Mastery</th><th>Challenge-adjusted</th><th>Easy</th><th>Medium</th><th>Hard</th><th>Evidence</th><th>Confidence</th><th>Status</th><th>Insight</th></tr></thead>
+    <thead><tr><th>Topic</th><th>Performance</th><th>Challenge-weighted</th><th>Easy</th><th>Medium</th><th>Hard</th><th>Evidence</th><th>Confidence</th><th>Status</th><th>Insight</th></tr></thead>
     <tbody>${profile.map((item) => `<tr title="${escapeHtml(`${item.insight.explanation} ${item.insight.recommendation} ${item.insight.evidenceNote}`)}"><td><strong>${escapeHtml(item.label)}</strong></td><td>${Math.round(item.mastery)}%</td><td>${Math.round(item.challengeAdjustedScore)}%</td><td>${difficultyCell(item, "Easy")}</td><td>${difficultyCell(item, "Medium")}</td><td>${difficultyCell(item, "Hard")}</td><td>${item.marksAwarded}/${item.marksAvailable} marks<br><span class="muted-line">${plural(item.questionCount, "question")}, ${plural(item.assessmentCount, "assessment")}</span></td><td><span class="confidence-pill ${confidenceClass(item.confidence)}">${escapeHtml(item.confidence)}</span></td><td><span class="status-pill ${statusClass(item.status)}">${escapeHtml(item.status)}</span></td><td>${escapeHtml(item.insight.headline)}<br><span class="muted-line">${escapeHtml(item.insight.evidenceNote)}</span></td></tr>`).join("")}</tbody>`;
 }
 
@@ -2694,10 +3225,12 @@ function buildStudentReportEvidence(allAssessments, allQuestions, allResponses, 
   });
   const strengths = profiles.topicProfile
     .filter((item) => item.status === "Strong" || item.status === "Secure" || item.status === "Positive indication")
+    .sort((a, b) => compareTopicEvidence(a, b, "strength"))
     .slice(0, 3)
-    .map((item) => ({ ...item, type: item.confidence === "Initial evidence" ? "Initial Strength" : "Strength" }));
+    .map((item) => ({ ...item, type: item.confidence === "Initial evidence" ? "Positive Indicator" : "Supported Strength" }));
   const priorities = profiles.topicProfile
     .filter((item) => item.status === "Priority" || item.status === "Possible priority" || item.status === "Developing")
+    .sort((a, b) => compareTopicEvidence(a, b, "priority"))
     .slice(0, 3)
     .map((item) => ({ ...item, type: item.confidence === "Initial evidence" ? "Possible Priority" : "Priority" }));
 
@@ -2738,6 +3271,20 @@ function buildStudentReportEvidence(allAssessments, allQuestions, allResponses, 
   };
 }
 
+function compareTopicEvidence(a, b, mode) {
+  const confidenceRank = { "Strong evidence": 4, "Reliable evidence": 3, "Emerging evidence": 2, "Initial evidence": 1 };
+  const confidenceDifference = (confidenceRank[b.confidence] || 0) - (confidenceRank[a.confidence] || 0);
+  if (confidenceDifference) return confidenceDifference;
+  const masteryDifference = mode === "strength" ? b.mastery - a.mastery : a.mastery - b.mastery;
+  if (masteryDifference) return masteryDifference;
+  const marksDifference = b.marksAvailable - a.marksAvailable;
+  if (marksDifference) return marksDifference;
+  if (mode === "priority") {
+    return sum((b.errorPatterns || []).map((item) => item.lostMarks)) - sum((a.errorPatterns || []).map((item) => item.lostMarks));
+  }
+  return a.label.localeCompare(b.label);
+}
+
 function joinQuestionEvidence(selectedAssessments, selectedQuestions, allResponses) {
   const assessmentMap = new Map(selectedAssessments.map((item) => [item.assessmentId, item]));
   const questionMap = new Map(selectedQuestions.map((item) => [`${item.assessmentId}::${item.questionId}`, item]));
@@ -2756,10 +3303,10 @@ function joinQuestionEvidence(selectedAssessments, selectedQuestions, allRespons
       studentId: assessment.studentId,
       questionId: question.questionId,
       studentAnswer: "",
-      markAwarded: 0,
+      markAwarded: null,
       maximumMark: question.maximumMark,
       markingMethod: "missing",
-      errorCode: "No attempt",
+      errorCode: "",
       tutorFeedback: ""
     };
     if (!response) missingResponses += 1;
@@ -2774,6 +3321,16 @@ function applyAutomaticMarking(item) {
     ? null
     : Number(response.markAwarded);
   let markingMethod = response.markingMethod || "tutor";
+  if (markingMethod === "missing") {
+    return {
+      ...item,
+      markAwarded: null,
+      maximumMark: question.maximumMark,
+      markingMethod,
+      errorCode: "",
+      tutorFeedback: response.tutorFeedback || ""
+    };
+  }
   if ((markAwarded === null || Number.isNaN(markAwarded)) && ["MCQ", "True / False"].includes(question.questionType)) {
     markAwarded = normaliseAnswer(response.studentAnswer) === normaliseAnswer(question.correctAnswer) ? question.maximumMark : 0;
     markingMethod = "automatic";
@@ -2782,7 +3339,16 @@ function applyAutomaticMarking(item) {
     markAwarded = markNumericAnswer(question, response.studentAnswer) ? question.maximumMark : 0;
     markingMethod = "automatic";
   }
-  if (markAwarded === null || Number.isNaN(markAwarded)) markAwarded = 0;
+  if (markAwarded === null || Number.isNaN(markAwarded)) {
+    return {
+      ...item,
+      markAwarded: null,
+      maximumMark: question.maximumMark,
+      markingMethod,
+      errorCode: response.errorCode || "",
+      tutorFeedback: response.tutorFeedback || ""
+    };
+  }
   const noAttempt = !response.studentAnswer && markAwarded === 0;
   return {
     ...item,
@@ -2813,6 +3379,7 @@ function validateData(selectedAssessments, selectedQuestions, rawResponses, join
   }
   for (const item of joined) {
     if (item.maximumMark <= 0) continue;
+    if (!Number.isFinite(item.markAwarded)) continue;
     if (item.markAwarded < 0 || item.markAwarded > item.maximumMark) continue;
     if (!item.question.topic || !item.question.difficulty || !item.question.questionType) continue;
     validJoined.push(item);
@@ -2826,6 +3393,7 @@ function validateData(selectedAssessments, selectedQuestions, rawResponses, join
 function buildAssessmentProgress(selectedAssessments, joined) {
   return selectedAssessments.map((assessment) => {
     const rows = joined.filter((item) => item.assessment.assessmentId === assessment.assessmentId);
+    if (!rows.length) return null;
     const markAwarded = sum(rows.map((item) => item.markAwarded));
     const maximumMark = sum(rows.map((item) => item.maximumMark));
     const attemptedQuestions = rows.filter((item) => item.response.studentAnswer || item.markAwarded > 0).length;
@@ -2840,7 +3408,7 @@ function buildAssessmentProgress(selectedAssessments, joined) {
       totalQuestions: rows.length,
       completionRate: rows.length ? (attemptedQuestions / rows.length) * 100 : 0
     };
-  });
+  }).filter(Boolean);
 }
 
 function buildProfile(joined, field, reportDate) {
@@ -3041,6 +3609,7 @@ function errorPatternSentence(errorCode) {
   return {
     "Incomplete explanation": "The main mark-loss pattern was incomplete explanation. Practise two-mark questions by requiring two clearly linked scientific points.",
     "Calculation method": "Most lost marks came from calculation method. Use structured steps: formula, substitution, working and final answer with unit.",
+    "Incorrect calculation method": "Most lost marks came from calculation method. Use structured steps: formula, substitution, working and final answer with unit.",
     "Knowledge gap": "The pattern suggests missing content knowledge. Revisit the core concept before further timed practice.",
     "Command word": "Practise distinguishing between state, describe, explain and calculate.",
     "No attempt": "The student left some questions unanswered. Completion and time management should be monitored in the next assessment."
@@ -3105,6 +3674,9 @@ function buildErrorPatterns(joined) {
   return [...groups.entries()].map(([errorCode, rows]) => ({
     errorCode,
     lostMarks: round1(sum(rows.map((item) => item.maximumMark - item.markAwarded))),
+    responseCount: rows.length,
+    assessmentCount: unique(rows.map((item) => item.assessment.assessmentId)).length,
+    affectedTopics: unique(rows.map((item) => item.question.topic).filter(Boolean)),
     recommendation: recommendationForError(errorCode)
   })).sort((a, b) => b.lostMarks - a.lostMarks).slice(0, 5);
 }
@@ -3159,47 +3731,96 @@ function difficultyInsight(profile) {
 }
 
 function generateParentReport(report) {
+  if (report.dataQuality.assessmentCount === 1) return generateBaselineReport(report);
   const latest = report.latestAssessment;
   const strongest = report.strengths[0];
   const priority = report.priorities[0];
   const error = report.errorPatterns[0];
-  const isBaseline = report.dataQuality.assessmentCount === 1;
-  const topicParagraph = topicReportParagraph(report, priority, strongest);
-  const progressText = report.overallProgress.assessments.length >= 3
-    ? `Topic trends are calculated only where at least three assessment-level topic results exist.`
-    : "This is a baseline diagnostic profile. It does not support long-term improving or declining claims yet.";
+  const trend = calculateTrend(report.overallProgress.assessments.map((item) => ({ date: item.date, percentage: item.percentage })));
+  const progressText = report.dataQuality.assessmentCount === 2
+    ? "A repeated pattern may be emerging, but more assessments are needed before a trend is reported."
+    : `Across ${report.dataQuality.assessmentCount} comparable, fully marked assessments, the overall pattern is ${trend.label.toLowerCase()}.`;
+  const projection = report.forecastEvidence.available ? ` ${report.forecastEvidence.message}` : "";
 
-  return `${report.student.name} - ${report.subject.name} Parent Report
+  return `${report.student.name} — ${report.subject.name} Performance Report
 
-Current Performance
-The latest assessment score was ${latest ? `${latest.markAwarded}/${latest.maximumMark}, or ${Math.round(latest.percentage)}%` : "not available"}. ${isBaseline ? "Baseline established." : "This remains diagnostic performance unless compatible boundary data and enough comparable full assessments are available."}
+Assessment Overview
+The latest reviewed assessment result was ${latest ? `${latest.markAwarded}/${latest.maximumMark}, equivalent to ${Math.round(latest.percentage)}%` : "not available"}.
 
-Evidence Coverage
-Across ${report.dataQuality.assessmentCount} assessments, ${report.dataQuality.responseCount} question-level responses provide ${report.dataQuality.totalEvidenceMarks} marks of evidence. Overall confidence is ${report.dataQuality.overallConfidence}. ${legacyRows.length ? "Some uploaded information is summary-only legacy evidence and should be interpreted cautiously." : ""}
+Progress Across Assessments
+${progressText}${projection}
 
-Progress Over Time
-${progressText} ${report.forecastEvidence.message}
-
-Topic Diagnostic Profile
-${topicParagraph}
-
-Confirmed Strengths
-${strongest ? `${strongest.label} is currently ${isBaseline ? "a positive initial indication" : "the strongest supported area"} at ${Math.round(strongest.mastery)}%, based on ${strongest.marksAwarded}/${strongest.marksAvailable} marks across ${strongest.assessmentCount} assessments.` : "No confirmed strength is labelled yet because more evidence is required."}
+Supported Strengths
+${strongest ? `${strongest.label} is the strongest supported area at ${Math.round(strongest.mastery)}%, based on ${strongest.marksAwarded}/${strongest.marksAvailable} marks across ${strongest.assessmentCount} assessments.` : "No strength has enough repeated evidence to be labelled yet."}
 
 Learning Priorities
-${priority ? `${priority.label} is ${isBaseline ? "a possible priority from this assessment" : "a priority/developing area"} at ${Math.round(priority.mastery)}%, based on ${priority.marksAwarded}/${priority.marksAvailable} marks across ${priority.assessmentCount} assessments.` : "No confirmed priority is labelled yet. Possible review areas should be treated as provisional until more evidence is available."}
+${priority ? `${priority.label} is the highest-supported current priority at ${Math.round(priority.mastery)}%, based on ${priority.marksAwarded}/${priority.marksAvailable} marks across ${priority.assessmentCount} assessments.` : "No learning priority has enough repeated evidence to be labelled yet."}
 
-Question-Type and Difficulty Performance
+Performance by Question Difficulty
 ${report.difficultyInsight}
 
-Main Mark-Loss Patterns
-${error ? `${error.errorCode} accounts for ${error.lostMarks} lost marks. Recommended next step: ${error.recommendation}` : "No repeated error pattern has enough evidence yet."}
+Main Mark-Loss Pattern
+${error ? `${error.errorCode} accounts for ${error.lostMarks} lost marks across ${error.responseCount} responses.` : "No repeated mark-loss pattern has enough evidence yet."}
 
 Recommended Next Steps
-${report.recommendations.join(" ") || "Continue collecting marked question-level evidence and review mistakes after each assessment."}
+${numberedRecommendations(report, priority, error).join("\n")}
 
-Data-Confidence Disclaimer
-Low-evidence topics are labelled cautiously. The report does not infer motivation, intelligence, unsupported percentiles, or long-term progress from a single assessment.`;
+Evidence Note
+Only fully marked assessments are included. Pending or incomplete marking is excluded from every score and pattern in this report.`;
+}
+
+function generateBaselineReport(report) {
+  const latest = report.latestAssessment;
+  const positive = report.strengths.slice(0, 2);
+  const priority = report.priorities[0] || report.topicProfile[0];
+  const error = report.errorPatterns[0];
+  const positiveText = positive.length
+    ? positive.map((topic) => `${topic.label} showed a positive initial indication with ${topic.marksAwarded}/${topic.marksAvailable} marks in the questions assessed.`).join(" ")
+    : "No topic is labelled as a supported strength from this single assessment; future evidence may reveal clearer positive indicators.";
+  const priorityText = priority
+    ? `${priority.label} is a possible priority, with ${priority.marksAwarded}/${priority.marksAvailable} marks in the questions assessed. ${priority.insight.headline}. This is an initial indicator and should be checked again.`
+    : "No possible priority can be identified until more marked topic evidence is available.";
+  const difficultyRows = report.difficultyProfile
+    .filter((item) => item.marksAvailable > 0)
+    .sort((a, b) => DIFFICULTIES.indexOf(a.label) - DIFFICULTIES.indexOf(b.label));
+  const difficultyText = difficultyRows.length
+    ? `The available questions show ${difficultyRows.map((item) => `${item.label} ${item.marksAwarded}/${item.marksAvailable}`).join(", ")}. ${report.difficultyInsight}`
+    : "There is not enough marked evidence to compare question difficulty.";
+
+  return `${report.student.name} — ${report.subject.name} Baseline Report
+
+Assessment Overview
+The student achieved ${latest ? `${latest.markAwarded}/${latest.maximumMark}, equivalent to ${Math.round(latest.percentage)}%` : "an unavailable score"}, in the first ${report.subject.name} diagnostic assessment. ${latest ? `${latest.attemptedQuestions} of ${latest.totalQuestions} questions were attempted.` : "Attempt information is unavailable."}
+
+Initial Performance Profile
+This assessment establishes a starting point for future progress checks. Topic findings should be treated as initial indicators rather than final judgements of mastery.
+
+Positive Indicators
+${positiveText}
+
+Possible Priorities for the Next Learning Cycle
+${priorityText}
+
+Question Difficulty
+${difficultyText}
+
+Main Mark-Loss Pattern
+${error ? `${error.errorCode} was the main recorded pattern and accounted for ${error.lostMarks} lost marks across ${error.responseCount} responses. This describes the marked evidence and does not infer a cause.` : "No recurring mark-loss classification was recorded in this assessment."}
+
+Recommended Next Steps
+${numberedRecommendations(report, priority, error).join("\n")}
+
+Evidence Note
+This report is based on one diagnostic assessment. Conclusions will be updated as further fully marked assessments are completed.`;
+}
+
+function numberedRecommendations(report, priority, error) {
+  const recommendations = [
+    priority ? `Complete short, targeted practice on ${priority.label} using the response formats assessed here.` : "Review the marked responses and identify one topic for targeted practice.",
+    error ? recommendationForError(error.errorCode) : "Use the marking points to check that each response includes all required scientific ideas.",
+    "Reassess the identified priority areas in the next bi-weekly or monthly assessment."
+  ];
+  return recommendations.map((item, index) => `${index + 1}. ${item}`);
 }
 
 function topicReportParagraph(report, priority, strongest) {
@@ -3224,12 +3845,14 @@ function recommendationForError(errorCode) {
   return {
     "Knowledge gap": "Use retrieval practice and targeted content review.",
     "Calculation method": "Use worked examples and step-by-step practice.",
+    "Incorrect calculation method": "Use worked examples and a formula, substitution, working, answer and unit checklist.",
     "Unit error": "Require units on every calculation.",
     "Command word": "Practise state, describe, explain and calculate command words.",
     "Incomplete explanation": "Use two linked scientific points in explanation questions.",
     "Practical method": "Practise variables, controls, observations and improvements.",
     "Careless error": "Use an end-of-paper checking routine.",
-    "Data interpretation": "Practise reading tables, graphs and anomalous results."
+    "Data interpretation": "Practise reading tables, graphs and anomalous results.",
+    "No attempt": "Review completion and time allocation, then practise answering every question before the final check."
   }[errorCode] ?? "Review the marked response and practise similar question formats.";
 }
 
@@ -3266,7 +3889,7 @@ function chemistryTrialQuestions() {
       ["C", "carbon dioxide", "Misconception"],
       ["D", "copper", "Misconception"]
     ], source),
-    mcq("A6", "6", "Chemical energetics", "Enthalpy changes", "Medium", "A reaction has Delta H = -120 kJ/mol. What does this show?", "C", [
+    mcq("A6", "6", "Chemical energetics", "Enthalpy changes", "Medium", "A reaction has ΔH = -120 kJ mol^{-1}. What does this show?", "C", [
       ["A", "Energy is absorbed overall.", "Misconception"],
       ["B", "The products have more energy than the reactants.", "Misconception"],
       ["C", "The reaction is exothermic.", ""],
@@ -3278,37 +3901,37 @@ function chemistryTrialQuestions() {
       ["C", "Chlorine is displaced.", "Misconception"],
       ["D", "Potassium is displaced.", "Misconception"]
     ], source),
-    mcq("A8", "8", "Organic chemistry", "Isomerism", "Medium", "Which compound is an isomer of butane, C4H10?", "B", [
+    mcq("A8", "8", "Organic chemistry", "Isomerism", "Medium", "Which compound is an isomer of butane, C_{4}H_{10}?", "B", [
       ["A", "propane", "Knowledge gap"],
       ["B", "methylpropane", ""],
       ["C", "butene", "Knowledge gap"],
       ["D", "butanol", "Knowledge gap"]
     ], source),
-    mcq("A9", "9", "Stoichiometry", "Acid-base titration calculation", "Hard", "25.0 cm3 of 0.100 mol/dm3 NaOH is neutralised by 12.5 cm3 of H2SO4. Given 2NaOH + H2SO4 -> Na2SO4 + 2H2O, what is the concentration of the acid?", "B", [
+    mcq("A9", "9", "Stoichiometry", "Acid-base titration calculation", "Hard", "25.0 cm^{3} of 0.100 mol dm^{-3} NaOH is neutralised by 12.5 cm^{3} of H_{2}SO_{4}. Given 2NaOH + H_{2}SO_{4} -> Na_{2}SO_{4} + 2H_{2}O, what is the concentration of the acid?", "B", [
       ["A", "0.050 mol/dm3", "Calculation method"],
       ["B", "0.100 mol/dm3", ""],
       ["C", "0.200 mol/dm3", "Calculation method"],
       ["D", "0.400 mol/dm3", "Calculation method"]
     ], source),
-    mcq("A10", "10", "Chemical reactions", "Reversible reactions and equilibrium", "Hard", "For 2SO2 + O2 <=> 2SO3, the forward reaction is exothermic. What is the effect of increasing temperature?", "B", [
-      ["A", "The yield of SO3 increases.", "Misconception"],
-      ["B", "The yield of SO3 decreases.", ""],
+    mcq("A10", "10", "Chemical reactions", "Reversible reactions and equilibrium", "Hard", "For 2SO_{2} + O_{2} <=> 2SO_{3}, the forward reaction is exothermic. What is the effect of increasing temperature?", "B", [
+      ["A", "The yield of SO_{3} increases.", "Misconception"],
+      ["B", "The yield of SO_{3} decreases.", ""],
       ["C", "There is no effect on the equilibrium position.", "Misconception"],
       ["D", "The reaction stops.", "Misconception"]
     ], source),
-    mcq("A11", "11", "Metals", "Redox and displacement", "Hard", "For Fe + Cu2+ -> Fe2+ + Cu, which statement is correct?", "C", [
+    mcq("A11", "11", "Metals", "Redox and displacement", "Hard", "For Fe + Cu^{2+} -> Fe^{2+} + Cu, which statement is correct?", "C", [
       ["A", "Fe is reduced.", "Misconception"],
-      ["B", "Cu2+ is oxidised.", "Misconception"],
+      ["B", "Cu^{2+} is oxidised.", "Misconception"],
       ["C", "Fe is the reducing agent.", ""],
-      ["D", "Cu2+ gains protons.", "Misconception"]
+      ["D", "Cu^{2+} gains protons.", "Misconception"]
     ], source),
     mcq("A12", "12", "Experimental techniques", "Cation tests", "Hard", "Aqueous ammonia is added to a solution and a white precipitate forms that is insoluble in excess. Which cation is present?", "B", [
-      ["A", "Zn2+", "Practical method"],
-      ["B", "Al3+", ""],
-      ["C", "Cu2+", "Practical method"],
-      ["D", "Fe3+", "Practical method"]
+      ["A", "Zn^{2+}", "Practical method"],
+      ["B", "Al^{3+}", ""],
+      ["C", "Cu^{2+}", "Practical method"],
+      ["D", "Fe^{3+}", "Practical method"]
     ], source),
-    tfQuestion("B1", "1", "Stoichiometry", "The mole and Avogadro constant", "Easy", "One mole of any substance contains 6.02 x 10^23 particles.", true, "Avogadro constant", source),
+    tfQuestion("B1", "1", "Stoichiometry", "The mole and Avogadro constant", "Easy", "One mole of any substance contains 6.02 × 10^{23} particles.", true, "Avogadro constant", source),
     tfQuestion("B2", "2", "Chemical reactions", "Catalysts", "Easy", "A catalyst is used up during a chemical reaction.", false, "Catalysts are not used up and remain chemically unchanged.", source),
     tfQuestion("B3", "3", "Metals", "Rusting conditions", "Easy", "Iron rusts only when both water and oxygen are present.", true, "Rusting requires both water and oxygen.", source),
     tfQuestion("B4", "4", "Experimental techniques", "Purity and melting point", "Easy", "A pure substance melts over a wide range of temperatures.", false, "A pure substance has a sharp, fixed melting point.", source),
@@ -3336,7 +3959,7 @@ function chemistryTrialQuestions() {
       mp("C4-MP1", "Add bromine water and shake", ["add bromine water", "bromine water", "shake with bromine water"]),
       mp("C4-MP2", "Bromine water changes from orange to colourless", ["orange to colourless", "decolourises", "decolorises", "turns colourless"])
     ], source),
-    writtenQuestion("C5", "5", "Stoichiometry", "Thermal decomposition calculation", "Medium", "Structured calculation", "StructuredCalculation", "Calcium carbonate decomposes when heated: CaCO3 -> CaO + CO2. Calculate the mass of CaO made from 50.0 g of CaCO3. Mr values: CaCO3 = 100, CaO = 56.", [
+    writtenQuestion("C5", "5", "Stoichiometry", "Thermal decomposition calculation", "Medium", "Structured calculation", "StructuredCalculation", "Calcium carbonate decomposes when heated: CaCO_{3} -> CaO + CO_{2}. Calculate the mass of CaO made from 50.0 g of CaCO_{3}. M_{r} values: CaCO_{3} = 100, CaO = 56.", [
       mp("C5-MP1", "Moles of CaCO3 = 50.0 / 100 = 0.50 mol, giving 0.50 mol CaO", ["50 / 100 = 0.5", "50.0 / 100 = 0.50", "0.5 mol", "0.50 mol"]),
       mp("C5-MP2", "Mass of CaO = 0.50 x 56 = 28 g", ["0.5 x 56", "0.50 x 56", "28 g", "28g"])
     ], source, { correctAnswer: "28 g", numericalTolerance: 0, requiredUnit: "g" }),
@@ -3348,7 +3971,7 @@ function chemistryTrialQuestions() {
       mp("C7-MP1", "A more reactive metal such as zinc or magnesium is attached to iron", ["more reactive metal", "zinc attached", "magnesium attached", "zinc or magnesium"]),
       mp("C7-MP2", "The more reactive metal loses electrons or corrodes instead of iron", ["loses electrons", "corrodes in preference", "reacts instead of iron", "oxidised instead of iron"])
     ], source),
-    writtenQuestion("C8", "8", "Experimental techniques", "Copper(II) ion test", "Medium", "Practical knowledge", "PracticalPlanning", "Describe the test and positive result for Cu2+ ions using aqueous sodium hydroxide.", [
+    writtenQuestion("C8", "8", "Experimental techniques", "Copper(II) ion test", "Medium", "Practical knowledge", "PracticalPlanning", "Describe the test and positive result for Cu^{2+} ions using aqueous sodium hydroxide.", [
       mp("C8-MP1", "Add aqueous sodium hydroxide", ["add sodium hydroxide", "aqueous sodium hydroxide", "add NaOH"]),
       mp("C8-MP2", "Light blue precipitate forms and is insoluble in excess", ["light blue precipitate", "blue precipitate", "insoluble in excess"])
     ], source),
@@ -3357,9 +3980,9 @@ function chemistryTrialQuestions() {
       mp("C9-MP2", "The energy does not increase the particles' kinetic energy", ["not increase kinetic energy", "kinetic energy stays constant", "temperature stays constant"])
     ], source),
     writtenQuestion("C10", "10", "Electrochemistry", "Anode half-equation in concentrated sodium chloride", "Hard", "Chemical equation", "ChemicalEquation", "Write the half-equation at the anode during electrolysis of concentrated aqueous sodium chloride.", [
-      mp("C10-MP1", "Correct species: chloride ions form chlorine and electrons", ["Cl- -> Cl2 + e-", "chloride ions form chlorine", "chloride to chlorine"]),
-      mp("C10-MP2", "Balanced atoms and charge: 2Cl- -> Cl2 + 2e-", ["2Cl- -> Cl2 + 2e-", "2cl- -> cl2 + 2e-", "2 chloride ions"])
-    ], source, { correctAnswer: "2Cl- -> Cl2 + 2e-" }),
+      mp("C10-MP1", "Correct species: chloride ions form chlorine and electrons", ["Cl^{-} -> Cl_{2} + e^{-}", "chloride ions form chlorine", "chloride to chlorine"]),
+      mp("C10-MP2", "Balanced atoms and charge: 2Cl^{-} -> Cl_{2} + 2e^{-}", ["2Cl^{-} -> Cl_{2} + 2e^{-}", "2cl- -> cl2 + 2e-", "2 chloride ions"])
+    ], source, { correctAnswer: "2Cl^{-} -> Cl_{2} + 2e^{-}" }),
     writtenQuestion("C11", "11", "Acids, bases and salts", "Strong and weak acids", "Hard", "Short explanation", "ShortAnswer", "Explain why a dilute strong acid can have a lower pH than a concentrated weak acid.", [
       mp("C11-MP1", "A strong acid dissociates completely, producing a high concentration of H+ ions", ["strong acid dissociates completely", "fully ionises", "high h+ concentration", "high hydrogen ion concentration"]),
       mp("C11-MP2", "A weak acid only partially dissociates, so it produces fewer H+ ions", ["weak acid partially dissociates", "partially ionises", "far fewer h+", "fewer hydrogen ions"])
@@ -3520,7 +4143,7 @@ function makeResponse(assessment, question, assessmentIndex, questionIndex) {
 function sampleCorrectAnswerForQuestion(question) {
   if (question.section === "A" || question.section === "B") return question.correctAnswer;
   if (question.centreQuestionType === "StructuredCalculation") return "working: 50 / 100 = 0.5 mol; finalAnswer: 28; unit: g";
-  if (question.centreQuestionType === "ChemicalEquation") return "2Cl- -> Cl2 + 2e-";
+  if (question.centreQuestionType === "ChemicalEquation") return "2Cl^{-} -> Cl_{2} + 2e^{-}";
   return question.markingPoints.flatMap((point) => point.acceptedConcepts || [point.description])[0] + "; " + (question.markingPoints[1]?.acceptedConcepts?.[0] || question.markingPoints[1]?.description || "");
 }
 
@@ -3757,7 +4380,7 @@ function radarChartOptions() {
             return [
               `${item.label}`,
               `Mastery: ${Math.round(item.rawMastery ?? item.mastery)}%`,
-              `Challenge-adjusted: ${Math.round(item.challengeAdjustedScore ?? item.mastery)}%`,
+              `Challenge-weighted: ${Math.round(item.challengeAdjustedScore ?? item.mastery)}%`,
               `Evidence: ${item.marksAwarded}/${item.marksAvailable} marks`,
               `Questions: ${item.questionCount}`,
               `Assessments: ${item.assessmentCount}`,
@@ -3894,6 +4517,14 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+function formatScientificText(value) {
+  return escapeHtml(value)
+    .replace(/_\{([^{}]*)\}/g, "<sub>$1</sub>")
+    .replace(/\^\{([^{}]*)\}/g, "<sup>$1</sup>")
+    .replace(/&lt;=&gt;/g, "⇌")
+    .replace(/-&gt;/g, "→");
+}
+
 const ReportCore = {
   normaliseAnswer,
   markNumericAnswer,
@@ -3921,25 +4552,35 @@ const ReportCore = {
   buildForecastEvidence,
   buildGradeEvidence,
   generateParentReport,
+  generateBaselineReport,
   createCentreSampleSystem,
   createTestSession,
+  beginPreparedSessionInState,
   markMcq,
   markTrueFalse,
   markNumerical,
   normaliseTrueFalse,
   suggestWrittenResponse,
   markObjectiveResponse,
+  DemoLocalAnswerProvider,
+  getStudentQuestionPayload,
+  getStaffMarkingData,
   upsertStudentResponse,
   buildTestModePayload,
   freezeQuestionSnapshot,
   getSessionQuestions,
   recoverTimeRemaining,
+  commitResponseRevision,
   markSubmittedSession,
   updateSessionScore,
   buildCentreReportEvidence,
+  isSessionFullyMarked,
   buildReportSnapshotFromState,
+  finaliseReportSnapshot,
+  createRevisedReportSnapshot,
   templateSummary,
-  validateTestTemplate
+  validateTestTemplate,
+  formatScientificText
 };
 
 if (typeof window !== "undefined") {

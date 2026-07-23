@@ -17,7 +17,7 @@ const buttonIssues = [...buttonTags(index), ...buttonTags(app)].filter((tag) => 
 assert.equal(buttonIssues.length, 0, `Buttons missing an intentional action: ${buttonIssues.join(", ")}`);
 assert.ok(index.includes("Centre-operated assessment system"));
 assert.ok(index.includes("Question Bank / 題目庫"));
-assert.ok(index.includes("?v=1.4.3"));
+assert.ok(index.includes("?v=1.5.0"));
 assert.ok(index.includes('<section id="printableReport" hidden>'));
 assert.ok(index.includes('id="reportModuleMount"'));
 assert.ok(app.includes("mountPrintableReport();"));
@@ -29,5 +29,13 @@ assert.ok(app.includes("data-question-action=\"add-to-test\""));
 assert.ok(app.includes("data-question-action=\"view-results\""));
 assert.ok(app.includes("data-builder-action=\"preview-test\""));
 assert.ok(index.includes("Device guard only"));
+assert.ok(index.includes("Prepare Test / 準備測驗"));
+assert.ok(index.includes("Begin Test / 正式開始"));
+assert.ok(index.includes("Public prototype only."));
+assert.ok(index.includes("Topic Performance"));
+assert.equal(index.includes("Strong / Weak Topic Map"), false);
+assert.ok(app.includes("abilityReportCentreSystemV3"));
+assert.ok(app.includes("isSessionFullyMarked"));
+assert.ok(app.includes("DemoLocalAnswerProvider"));
 
 console.log("PASS static smoke checks");

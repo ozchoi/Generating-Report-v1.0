@@ -30,13 +30,15 @@ jobs:
       - name: Build static site
         run: |
           rm -rf _site
-          mkdir -p _site/sample-data
+          mkdir -p _site/sample-data _site/docs
           cp index.html app.js styles.css _site/
           cp -R sample-data/. _site/sample-data/
+          cp SECURITY_LIMITATIONS.md _site/
+          cp docs/SECURE_BACKEND_PLAN.md _site/docs/
           touch _site/.nojekyll
           cat > _site/deployment.json <<JSON
           {
-            "version": "1.4.3",
+            "version": "1.5.0",
             "sha": "${GITHUB_SHA}",
             "deployedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           }
@@ -49,7 +51,12 @@ jobs:
           test -f _site/styles.css
           grep -q "Centre-operated assessment system" _site/index.html
           grep -q "Question Bank / 題目庫" _site/index.html
-          grep -q "v=1.4.3" _site/index.html
+          grep -q "v=1.5.0" _site/index.html
+          grep -q "Prepare Test / 準備測驗" _site/index.html
+          grep -q "Begin Test / 正式開始" _site/index.html
+          grep -q "Question answers and marking logic are present in the public source" _site/index.html
+          grep -q "Topic Performance" _site/index.html
+          ! grep -q "Strong / Weak Topic Map" _site/index.html
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4

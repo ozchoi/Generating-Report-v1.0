@@ -1,126 +1,162 @@
-# QA Checklist v1.4.3
+# QA Checklist v1.5.0
 
-Use the static site through an HTTP server. Do not open `index.html` directly for final QA.
+Run the static site through an HTTP server. Export a local backup before testing migration or reset paths.
 
 ## Fresh Browser
 
-- Confirm footer shows `App version: v1.4.3`, storage schema v2, and deployment metadata when available.
-- Confirm privacy warning appears in Data Management.
-- Confirm centre workflow is the primary interface and legacy import sidebar is hidden.
-- Complete workflow: select demo student -> select Chemistry test -> start Test Mode -> answer questions -> submit -> mark written answers -> generate report -> save edited report -> print.
+- Footer shows `App version: v1.5.0`, storage schema v3, and deployment metadata when available.
+- Initial title is `Assessment Dashboard / 測驗管理`; no report is selected or rendered.
+- Staff must explicitly select the demo student before Prepare Test is enabled.
+- Data Management shows the public-source examination security warning.
 
-## Existing v1 Local Storage
+## Existing v2 Local Storage
 
-- Load with old `abilityReportCentreSystemV1` data.
-- Expected: migration to v2 or visible recovery message.
-- Confirm the page does not crash.
-- Export old/local backup before reset where needed.
+- Load `abilityReportCentreSystemV2` data and confirm migration to `abilityReportCentreSystemV3`.
+- Confirm `serverDeadline` becomes `deadlineAt`.
+- Confirm `answerChangeCount` becomes `answerRevisionCount`.
+- Confirm legacy error arrays become primary and secondary error-code fields.
+- Confirm report snapshots gain version and finalisation fields.
+- If migration fails, confirm old-data export/recovery remains visible and the app does not crash.
 
 ## Desktop Chrome
 
-- Check module navigation.
-- Check Question Bank actions: Preview, Duplicate, Add to Test, View Results.
-- Check Test Builder: create, edit, add section, add question, move up/down, move between sections, remove, preview test, preview mark scheme, publish, duplicate.
-- Check visible disabled controls have disabled styling and reason text.
+- Navigation is grouped into Primary workflow, Assessment setup, and Utilities.
+- Report actions appear only inside a selected report.
+- Question Bank and Test Builder actions remain functional.
+- No visible button is a silent placeholder.
 
 ## iPad-Width Layout
 
-- Check dashboard modules wrap cleanly.
-- Check Test Mode question navigation, answer controls, and submit review dialog.
-- Check Test Builder controls stack without clipping.
+- Check landscape and portrait widths.
+- Module groups wrap without overlap.
+- Prepare, Begin, answers, question navigation, and marking controls have usable touch targets.
+- Marking queue stacks above the selected response panel.
+
+## Explicit Student Selection
+
+- Prepare Test is disabled until a student and test are selected.
+- Confirmation names the selected student.
+- Student selection clears after submission, cancellation, Begin, or return to dashboard.
+
+## Prepare Versus Begin
+
+- Prepare creates a `Prepared` session with frozen questions.
+- `startedAt` and `deadlineAt` remain empty before Begin.
+- The cover page shows student, questions, marks, time and instructions.
+- Begin changes status to `In progress` and starts the timer once.
+
+## Long Written-Answer Autosave
+
+- Type several sentences with pauses longer than 800 ms.
+- Confirm text, focus, cursor position, selection and iPad keyboard remain stable.
+- Confirm autosave updates status/progress without replacing the active input.
+- Confirm revision count changes on committed revisions, not each keystroke.
+
+## Refresh During Prepared State
+
+- Refresh after Prepare and before Begin.
+- Full-screen gate shows `Assessment ready`; the centre dashboard is not exposed.
+
+## Refresh During In Progress
+
+- Answer a question, note time remaining, then refresh.
+- Full-screen gate shows `Assessment in progress`.
+- Resume preserves the answer and stored `deadlineAt`; the timer does not reset.
 
 ## Offline After Test Begins
 
-- Start a test, then simulate offline.
-- Answer several questions.
-- Expected: local autosave continues in this browser; no external storage claim is shown.
-
-## Page Refresh During Test
-
-- Start a test, answer questions, refresh.
-- Expected: unfinished session appears with Resume / Cancel options.
+- Simulate offline after Begin.
+- Confirm browser-local autosave continues and no central-storage claim appears.
 
 ## Timer Expiry
 
-- Use a short draft test time limit.
-- Expected: auto-submit, objective marking, and completion screen.
+- Use a short draft test.
+- Confirm one automatic submission and the completion screen; repeated submission is blocked.
 
 ## Incomplete Submission
 
-- Leave some questions unanswered and flag one.
-- Expected: submit review dialog shows Answered, Unanswered, Flagged, Time remaining, and jump buttons.
+- Leave questions unanswered and flag at least one.
+- Review shows all unanswered links, all flagged links, actual totals and the response-lock warning.
+- Return to Test and Submit and Finish both work.
 
 ## Written Marking
 
-- Confirm Generate Report is disabled before all written answers are reviewed.
-- Use Approve Suggestion and Save and Next.
-- Select multiple error codes.
-- Try Finish Marking early; expected incomplete warning with Continue Marking and Cancel.
+- Session queue identifies student, assessment, date, objective status, written progress, score and status.
+- Needs review, Marked and All filters select the intended queue.
+- Marking points show descriptions, marks, matched evidence and accepted concepts, with internal IDs secondary.
+- Suggestions say rule-based match quality; no confidence percentage appears.
+- Structured calculation shows method, final value and unit checks; staff final mark remains required.
+- Non-full marks require a primary code or explicit No error classification.
+- Secondary codes do not add lost marks.
+- Continue Marking scrolls to the first unreviewed response.
+- Leave Marking Incomplete returns to Assessment Records and preserves `Needs marking`.
 
 ## Report Generation
 
-- Generate report after marking.
-- Open Report from session table.
-- Confirm Reports module opens, report metadata appears, charts/tables update, and summary scrolls into view.
-- Edit narrative, refresh, and confirm edits persist.
+- Needs marking sessions do not change score, topic, difficulty, trend or error evidence.
+- No null mark is converted to zero in centre report evidence.
+- One assessment uses Baseline Report, Positive Indicators and Possible Priorities wording only.
+- Two assessments state that a repeated pattern may be emerging without reporting a trend.
+- Three or more comparable, fully marked assessments may report a trend.
+- Open Report switches to Reports, updates title, renders the selected snapshot and scrolls to its start.
+
+## Locked Final Report
+
+- Finalise locks the textarea and records version/finalised timestamp.
+- Save Draft, Finalise and Revert are hidden for Final versions.
+- Create Revised Version creates a new Draft and leaves the original Final unchanged.
+- Finalising the revision marks the prior version as superseded.
 
 ## Print Preview
 
-- Confirm only `#printableReport` prints.
-- Confirm centre controls, upload/import panels, Test Builder, Question Bank, sessions, and staff buttons are hidden.
-- Confirm A4 output has no clipped tables and print radars are visible.
+- A4 output contains only `#printableReport`.
+- Centre navigation, setup, marking, utilities and all staff-only buttons are hidden.
+- Radar charts, narrative and tables are visible without clipping.
+
+## Security Warning
+
+- Data Management states that answers and marking logic are public source.
+- `SECURITY_LIMITATIONS.md` and `docs/SECURE_BACKEND_PLAN.md` match the prototype boundary.
+- No API key, service key or secret is present.
 
 ## Hard Refresh After Deployment
 
-- Confirm `deployment.json` loads.
-- Confirm footer SHA matches the latest deployed commit.
-- Confirm CSS and JS use `?v=1.4.3`.
+- `deployment.json` reports v1.5.0 and the deployed commit SHA.
+- CSS and JS use `?v=1.5.0`.
+- Hard refresh loads the same version shown in the footer.
 
 ## Button Inventory
 
-| Button or control | Expected result | Works | Disabled with reason | Not applicable |
-| --- | --- | --- | --- | --- |
-| Module navigation | Opens selected module only |  |  |  |
-| Dashboard quick actions | Jump to target module |  |  |  |
-| Student search result | Selects student |  |  |  |
-| Test selection | Selects published test |  |  |  |
-| Start Test | Starts or shows duplicate-session guard |  |  |  |
-| Resume Test | Opens in-progress session |  |  |  |
-| Cancel Session | Cancels with confirmation |  |  |  |
-| Question Preview | Opens staff preview drawer |  |  |  |
-| Duplicate Question | Creates draft copy |  |  |  |
-| Add to Test | Adds to editable draft or creates one |  |  |  |
-| View Results | Opens analytics or empty-state drawer |  |  |  |
-| Create New Test | Creates draft test |  |  |  |
-| Duplicate Test | Creates editable draft copy |  |  |  |
-| Save Draft | Persists draft changes |  |  |  |
-| Add Section | Adds section to draft |  |  |  |
-| Add Selected Question | Adds selected bank question |  |  |  |
-| Move Up / Down | Reorders question |  |  |  |
-| Move section selector | Moves question between sections |  |  |  |
-| Remove Question | Removes question from draft |  |  |  |
-| Preview Student Test | Opens read-only student preview |  |  |  |
-| Preview Mark Scheme | Opens staff mark scheme |  |  |  |
-| Publish | Publishes only when validation passes |  |  |  |
-| Previous | Disabled on first question |  |  |  |
-| Next | Disabled on final question |  |  |  |
-| Flag Question | Toggles Question Flagged text |  |  |  |
-| Submit Test | Opens in-page review dialog |  |  |  |
-| Submit review jump | Returns to unanswered/flagged question |  |  |  |
-| Confirm Submit | Submits once only |  |  |  |
-| Return to Dashboard | Requires 3-second hold |  |  |  |
-| Approve Suggestion | Saves suggested mark |  |  |  |
-| Save and Next | Saves mark, feedback, codes and scrolls next |  |  |  |
-| Finish Marking | Blocks incomplete marking visibly |  |  |  |
-| Generate Report | Disabled until written marking complete |  |  |  |
-| Open Report | Opens Reports module and selected snapshot |  |  |  |
-| Save Draft report | Persists edited narrative |  |  |  |
-| Finalise Report | Marks report final |  |  |  |
-| Revert Report | Restores generated narrative with confirmation |  |  |  |
-| Print Report | Prints report wrapper only |  |  |  |
-| Export PDF | Opens print dialog for Save as PDF |  |  |  |
-| Export Text | Downloads report text |  |  |  |
-| Import Existing Results upload controls | Loads CSV/XLSX or shows dependency error |  |  |  |
-| Export Local Backup | Downloads JSON backup |  |  |  |
-| Import Local Backup | Validates and imports JSON backup |  |  |  |
-| Reset Demo Data | Resets after confirmation |  |  |  |
+For every row, record `Works`, `Disabled with reason`, or `Not applicable`.
+
+| Button or control | Expected result | Result |
+| --- | --- | --- |
+| Module navigation | Opens the selected module only | |
+| Dashboard quick actions | Opens the requested workflow module | |
+| Student selection | Explicitly selects one student | |
+| Test selection | Selects a published assessment | |
+| Prepare Test | Creates Prepared session without timer | |
+| Begin Test | Starts timer and first question | |
+| Resume Assessment | Restores in-progress state and deadline | |
+| Cancel Existing Assessment | Cancels after confirmation | |
+| Start Separate New Assessment | Requires explicit confirmation | |
+| Previous / Next | Disabled at first/final question | |
+| Flag Question | Toggles visible flagged state | |
+| Submit Test | Opens complete review dialog | |
+| Return to Test | Closes review without submission | |
+| Submit and Finish | Saves once and locks responses | |
+| Return to Dashboard | Requires three-second hold | |
+| Marking filters / queue | Selects a visible assessment | |
+| Use Suggested Mark | Applies rule-based suggestion for staff review | |
+| Save and Next | Validates classification, saves and advances | |
+| Finish Marking | Finishes or shows distinct incomplete actions | |
+| Generate Report | Enabled only when every response has a final mark | |
+| Open Report | Opens selected version in Reports | |
+| Save Draft / Finalise | Persists or locks a Draft | |
+| Create Revised Version | Clones Final as next Draft version | |
+| Print / Export | Uses selected report only | |
+| Question Bank actions | Preview, duplicate, add and analytics work | |
+| Test Builder actions | Create, edit, preview, validate and publish work | |
+| Import Existing Results | Imports or shows dependency error | |
+| Export / Import Local Backup | Preserves canonical v3 state | |
+| Reset Demo Data | Warns to back up and requires confirmation | |
