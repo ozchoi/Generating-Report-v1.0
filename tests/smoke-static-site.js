@@ -31,11 +31,16 @@ assert.ok(app.includes("data-builder-action=\"preview-test\""));
 assert.ok(index.includes("Device guard only"));
 assert.ok(index.includes("Prepare Test / 準備測驗"));
 assert.ok(index.includes("Begin Test / 正式開始"));
+assert.ok(index.includes("Add New Student / 新增學生"));
+assert.ok(index.includes('id="addNewStudent"'));
 assert.ok(index.includes("Public prototype only."));
 assert.ok(index.includes("Topic Performance"));
 assert.equal(index.includes("Strong / Weak Topic Map"), false);
 assert.ok(app.includes("abilityReportCentreSystemV3"));
 assert.ok(app.includes("isSessionFullyMarked"));
 assert.ok(app.includes("DemoLocalAnswerProvider"));
+assert.ok(app.includes("generateNextStudentId"));
+assert.ok(app.includes("validateStudentInput"));
+assert.ok(app.includes("groupPublishedTestsForStudent"));
 
 console.log("PASS static smoke checks");

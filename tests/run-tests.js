@@ -375,6 +375,89 @@ test("student selection is required when preparing a session", () => {
   assert.throws(() => core.createTestSession(state, null, "TEST-CHEM-TRIAL-001", new Date()), /valid student and test/);
 });
 
+test("student IDs use a readable sequential centre sequence", () => {
+  assert.equal(core.generateNextStudentId([{ studentId: "STU-0001" }, { studentId: "STU-0012" }, { studentId: "LEGACY-9" }]), "STU-0013");
+});
+
+test("student ID generation remains unique when legacy IDs are present", () => {
+  const students = [{ studentId: "STU-0001" }, { studentId: "STU-0002" }, { studentId: "STU-0099" }, { studentId: "OLD-100" }];
+  const next = core.generateNextStudentId(students);
+  assert.equal(next, "STU-0100");
+  assert.equal(students.some((student) => student.studentId === next), false);
+});
+
+test("student validation requires name, school, level, and at least one subject", () => {
+  const validation = core.validateStudentInput({ studentName: " ", school: "", schoolYear: "", subjects: [] });
+  assert.equal(validation.valid, false);
+  assert.ok(validation.errors.studentName);
+  assert.ok(validation.errors.school);
+  assert.ok(validation.errors.schoolYear);
+  assert.ok(validation.errors.subjects);
+});
+
+test("student validation trims values and requires a custom Other subject", () => {
+  const invalidOther = core.validateStudentInput({ studentName: " Alex Chan ", school: " Example School ", schoolYear: " Year 10 ", subjects: [], otherSelected: true, customSubject: " " });
+  assert.equal(invalidOther.valid, false);
+  const valid = core.validateStudentInput({ studentName: " Alex Chan ", chineseName: " 陳同學 ", school: " Example School ", schoolYear: " Year 10 ", subjects: [" Chemistry "], contactNumber: " 1234 " });
+  assert.equal(valid.valid, true);
+  assert.deepEqual(valid.values, {
+    studentName: "Alex Chan",
+    chineseName: "陳同學",
+    school: "Example School",
+    schoolYear: "Year 10",
+    subjects: ["Chemistry"],
+    contactNumber: "1234"
+  });
+});
+
+test("duplicate student detection ignores case and repeated spaces", () => {
+  const students = [{ studentId: "STU-0001", studentName: "Alex  Chan", school: "Example Secondary School", schoolYear: "Year 10" }];
+  const match = core.findSimilarStudent(students, { studentName: " alex chan ", school: "example   secondary school", schoolYear: " year 10 " });
+  assert.equal(match.studentId, "STU-0001");
+  assert.equal(core.findSimilarStudent(students, { studentName: "Alex Chan", school: "Example Secondary School", schoolYear: "Year 10" }, "STU-0001"), null);
+});
+
+test("student migration derives subjects and timestamps from legacy programme data", () => {
+  const oldState = core.createCentreSampleSystem();
+  delete oldState.students[0].subjects;
+  delete oldState.students[0].createdAt;
+  delete oldState.students[0].updatedAt;
+  oldState.students[0].programme = "IGCSE Chemistry";
+  const migrated = core.migrateCentreState(oldState);
+  assert.deepEqual(migrated.students[0].subjects, ["IGCSE Chemistry"]);
+  assert.ok(migrated.students[0].createdAt);
+  assert.ok(migrated.students[0].updatedAt);
+  assert.equal(migrated.students[0].programme, "IGCSE Chemistry");
+});
+
+test("student search matches subjects, Chinese name, and student ID", () => {
+  const student = {
+    studentId: "STU-0042",
+    studentName: "Alex Chan",
+    chineseName: "陳同學",
+    school: "Example School",
+    schoolYear: "Year 10",
+    subjects: ["Chemistry", "Mathematics"],
+    contactNumber: "1234"
+  };
+  assert.equal(core.studentMatchesSearch(student, "mathematics"), true);
+  assert.equal(core.studentMatchesSearch(student, "陳同學"), true);
+  assert.equal(core.studentMatchesSearch(student, "stu-0042"), true);
+  assert.equal(core.studentMatchesSearch(student, "biology"), false);
+});
+
+test("published tests matching student subjects are recommended first", () => {
+  const templates = [
+    { id: "MATH", status: "Published", subjectName: "Mathematics" },
+    { id: "CHEM", status: "Published", subjectName: "Chemistry" },
+    { id: "BIO", status: "Published", subjectName: "Biology" },
+    { id: "DRAFT", status: "Draft", subjectName: "Chemistry" }
+  ];
+  const grouped = core.groupPublishedTestsForStudent(templates, { subjects: ["Chemistry"] });
+  assert.deepEqual(grouped.recommended.map((template) => template.id), ["CHEM"]);
+  assert.deepEqual(grouped.other.map((template) => template.id), ["MATH", "BIO"]);
+});
+
 test("written answer revisions are counted on commit, not per keystroke", () => {
   const response = { answer: "", lastCommittedAnswer: "", answerRevisionCount: 0 };
   response.answer = "First complete answer.";

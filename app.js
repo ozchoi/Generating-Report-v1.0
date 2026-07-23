@@ -35,6 +35,19 @@ const ERROR_CODES = [
 ];
 
 const DIFFICULTIES = ["Easy", "Medium", "Hard", "Exam-style", "Challenge"];
+const COMMON_STUDENT_SUBJECTS = [
+  "Mathematics",
+  "Additional Mathematics",
+  "Physics",
+  "Chemistry",
+  "Biology",
+  "Economics",
+  "Geography",
+  "ICT",
+  "English",
+  "Chinese",
+  "Other"
+];
 const DIFFICULTY_WEIGHTS = {
   Easy: 1,
   Medium: 1.2,
@@ -76,6 +89,7 @@ let markingFilter = "Needs review";
 let testTimerInterval = null;
 let returnGuardTimer = null;
 let submissionInProgress = false;
+let staffDrawerReturnFocus = null;
 const responseSaveTimers = new Map();
 
 const hasDom = typeof document !== "undefined";
@@ -182,6 +196,7 @@ function bindCentreEvents() {
     button.addEventListener("click", () => showCentreModule(button.dataset.jumpModule));
   });
   document.querySelector("#studentSearchInput")?.addEventListener("input", renderStartTestModule);
+  document.querySelector("#addNewStudent")?.addEventListener("click", () => openStudentForm());
   document.querySelector("#questionSearchInput")?.addEventListener("input", renderQuestionBank);
   document.querySelector("#questionDifficultyFilter")?.addEventListener("change", renderQuestionBank);
   document.querySelector("#questionTypeFilter")?.addEventListener("change", renderQuestionBank);
@@ -190,6 +205,11 @@ function bindCentreEvents() {
   document.querySelector("#testBuilderPanel")?.addEventListener("input", handleTestBuilderInput);
   document.querySelector("#testBuilderPanel")?.addEventListener("change", handleTestBuilderChange);
   document.querySelector("#studentSearchResults")?.addEventListener("click", (event) => {
+    const studentAction = event.target.closest("[data-student-action]");
+    if (studentAction?.dataset.studentAction === "edit") {
+      openStudentForm(studentAction.dataset.studentId);
+      return;
+    }
     const item = event.target.closest("[data-student-id]");
     if (!item) return;
     selectedCentreStudentId = item.dataset.studentId;
@@ -224,6 +244,7 @@ function bindCentreEvents() {
   document.querySelector("#resumeActiveTest")?.addEventListener("click", () => resumeInProgressSession(activeSessionId));
   bindReturnDeviceGuard();
   document.querySelector("#closeStaffDrawer")?.addEventListener("click", closeStaffDrawer);
+  document.addEventListener("keydown", handleStaffDrawerKeydown);
   document.querySelector("#exportLocalBackup")?.addEventListener("click", exportLocalBackup);
   document.querySelector("#importLocalBackup")?.addEventListener("change", importLocalBackup);
   document.querySelector("#resetDemoData")?.addEventListener("click", resetDemoData);
@@ -304,6 +325,18 @@ function migrateCentreState(state) {
     studentResponses: Array.isArray(state.studentResponses) ? state.studentResponses : [],
     reportSnapshots: Array.isArray(state.reportSnapshots) ? state.reportSnapshots : []
   };
+  const migrationTimestamp = new Date().toISOString();
+  next.students = next.students.map((student) => ({
+    ...student,
+    studentName: text(student.studentName),
+    chineseName: text(student.chineseName),
+    school: text(student.school),
+    schoolYear: text(student.schoolYear),
+    subjects: normaliseStudentSubjects(student.subjects, student.programme),
+    contactNumber: text(student.contactNumber),
+    createdAt: student.createdAt || student.updatedAt || migrationTimestamp,
+    updatedAt: student.updatedAt || student.createdAt || migrationTimestamp
+  }));
   next.testSessions = next.testSessions.map((session) => ({
     ...session,
     deadlineAt: session.deadlineAt || session.serverDeadline || "",
@@ -385,6 +418,7 @@ function installGlobalErrorHandlers() {
 
 function openStaffDrawer(title, subtitle, bodyHtml) {
   const drawer = document.querySelector("#staffDrawer");
+  if (drawer?.hidden) staffDrawerReturnFocus = document.activeElement;
   document.querySelector("#staffDrawerTitle").textContent = title;
   document.querySelector("#staffDrawerSubtitle").textContent = subtitle || "";
   document.querySelector("#staffDrawerBody").innerHTML = bodyHtml;
@@ -394,6 +428,17 @@ function openStaffDrawer(title, subtitle, bodyHtml) {
 function closeStaffDrawer() {
   const drawer = document.querySelector("#staffDrawer");
   if (drawer) drawer.hidden = true;
+  const returnFocus = staffDrawerReturnFocus;
+  staffDrawerReturnFocus = null;
+  if (returnFocus?.isConnected) requestAnimationFrame(() => returnFocus.focus());
+}
+
+function handleStaffDrawerKeydown(event) {
+  if (event.key !== "Escape") return;
+  const drawer = document.querySelector("#staffDrawer");
+  if (!drawer || drawer.hidden) return;
+  event.preventDefault();
+  closeStaffDrawer();
 }
 
 function setLegacyImportStatus(message) {
@@ -470,7 +515,10 @@ function createCentreSampleSystem() {
     contactNumber: "DEMO-0000",
     school: "Demo Harbour College",
     schoolYear: "Year 10",
-    programme: "IGCSE Chemistry"
+    programme: "IGCSE Chemistry",
+    subjects: ["Chemistry"],
+    createdAt: now,
+    updatedAt: now
   }];
   const questionBank = sample.questions.map((question) => createCentreQuestion(question, now));
   const testTemplate = {
@@ -673,27 +721,24 @@ function renderDashboardModule() {
 }
 
 function renderStartTestModule() {
-  const query = text(document.querySelector("#studentSearchInput")?.value).toLowerCase();
-  const students = centreState.students.filter((student) => {
-    const haystack = [student.studentId, student.studentName, student.chineseName, student.contactNumber, student.school, student.schoolYear, student.programme].join(" ").toLowerCase();
-    return !query || haystack.includes(query);
-  });
-  document.querySelector("#studentSearchResults").innerHTML = students.map((student) => `
-    <button type="button" class="selection-item ${student.studentId === selectedCentreStudentId ? "selected" : ""}" data-student-id="${student.studentId}">
-      <strong>${escapeHtml(student.studentName)} ${escapeHtml(student.chineseName)}</strong>
-      <p>${escapeHtml(student.school)} · ${escapeHtml(student.schoolYear)} · ${escapeHtml(student.programme)}</p>
-      <p>${escapeHtml(student.studentId)} · ${escapeHtml(student.contactNumber)}</p>
-    </button>`).join("");
+  const query = document.querySelector("#studentSearchInput")?.value || "";
+  const students = centreState.students.filter((student) => isRenderableStudent(student) && studentMatchesSearch(student, query));
+  document.querySelector("#studentSearchResults").innerHTML = students.map(studentSelectionCard).join("") || "<p>No students match this search.</p>";
   const templates = centreState.testTemplates.filter((template) => template.status === "Published");
-  document.querySelector("#testTemplateList").innerHTML = templates.map((template) => {
+  const student = selectedCentreStudentId ? studentById(selectedCentreStudentId) : null;
+  const groupedTemplates = groupPublishedTestsForStudent(templates, student);
+  const templateMarkup = (template, recommended = false) => {
     const summary = templateSummary(centreState, template.id);
     return `<button type="button" class="selection-item ${template.id === selectedTestTemplateId ? "selected" : ""}" data-template-id="${template.id}">
-      <strong>${escapeHtml(template.name)}</strong>
+      <strong>${escapeHtml(template.name)}${recommended ? ' <span class="recommended-label">Recommended</span>' : ""}</strong>
       <p>${escapeHtml(template.subjectName)} · ${escapeHtml(template.testType)} · ${summary.questionCount} questions · ${summary.maximumMark} marks · ${template.timeLimitMinutes} minutes</p>
       <p>Last used: ${escapeHtml(lastUsedLabel(template.id))}</p>
     </button>`;
-  }).join("");
-  const student = selectedCentreStudentId ? studentById(selectedCentreStudentId) : null;
+  };
+  document.querySelector("#testTemplateList").innerHTML = student
+    ? `${groupedTemplates.recommended.length ? `<section class="test-template-group"><h4>Recommended for this student</h4>${groupedTemplates.recommended.map((template) => templateMarkup(template, true)).join("")}</section>` : ""}
+      ${groupedTemplates.other.length ? `<section class="test-template-group"><h4>${groupedTemplates.recommended.length ? "Other published tests" : "Published tests"}</h4>${groupedTemplates.other.map((template) => templateMarkup(template)).join("")}</section>` : ""}`
+    : templates.map((template) => templateMarkup(template)).join("");
   const template = selectedTestTemplateId ? templateById(selectedTestTemplateId) : null;
   const summary = template ? templateSummary(centreState, template.id) : null;
   document.querySelector("#startTestSummary").innerHTML = student && template ? `
@@ -715,6 +760,194 @@ function renderStartTestModule() {
     startButton.textContent = ready ? "Prepare Test / 準備測驗" : !student && !template ? "Select a student and test" : !student ? "Select a student" : "Select a test";
     startButton.title = ready ? "Freeze this assessment and open the student cover page. The timer will not start yet." : startButton.textContent;
   }
+}
+
+function studentSelectionCard(student) {
+  const selected = student.studentId === selectedCentreStudentId;
+  const contact = text(student.contactNumber);
+  return `<article class="student-selection-card ${selected ? "selected" : ""}">
+    <button type="button" class="student-selection-main" data-student-id="${escapeHtml(student.studentId)}">
+      <strong>${escapeHtml(studentDisplayName(student))}</strong>
+      <p>${escapeHtml(student.school)} · ${escapeHtml(student.schoolYear)}</p>
+      <p>${escapeHtml(studentSubjectLabel(student))}</p>
+      <p>${escapeHtml(student.studentId)}${contact ? ` · ${escapeHtml(contact)}` : ""}</p>
+    </button>
+    ${selected ? `<button type="button" class="secondary-action student-edit-action staff-only" data-student-action="edit" data-student-id="${escapeHtml(student.studentId)}">Edit Student / 編輯資料</button>` : ""}
+  </article>`;
+}
+
+function openStudentForm(studentId = "", draft = null) {
+  const existingStudent = studentId ? centreState.students.find((student) => student.studentId === studentId) : null;
+  const editing = Boolean(existingStudent);
+  const values = draft || studentFormValues(existingStudent || {});
+  openStaffDrawer(
+    editing ? "Edit Student / 編輯資料" : "Add New Student / 新增學生",
+    editing ? `Student ID: ${existingStudent.studentId}` : "Add a centre student without creating an account.",
+    studentFormMarkup(values, existingStudent?.studentId || "")
+  );
+  const form = document.querySelector("#studentForm");
+  form?.addEventListener("submit", handleStudentFormSubmit);
+  document.querySelector("#studentFormCancel")?.addEventListener("click", closeStaffDrawer);
+  document.querySelector("#studentOtherSubject")?.addEventListener("change", updateOtherSubjectField);
+  document.querySelector("#studentName")?.focus();
+}
+
+function studentFormValues(student) {
+  return {
+    studentName: text(student.studentName),
+    chineseName: text(student.chineseName),
+    school: text(student.school),
+    schoolYear: text(student.schoolYear),
+    subjects: normaliseStudentSubjects(student.subjects, student.programme),
+    contactNumber: text(student.contactNumber),
+    customSubject: ""
+  };
+}
+
+function studentFormMarkup(values, studentId) {
+  const selectedSubjects = new Set(values.subjects || []);
+  const commonSelections = COMMON_STUDENT_SUBJECTS.filter((subject) => subject !== "Other" && selectedSubjects.has(subject));
+  const customSubjects = (values.subjects || []).filter((subject) => !COMMON_STUDENT_SUBJECTS.includes(subject));
+  const otherSelected = selectedSubjects.has("Other") || customSubjects.length > 0;
+  const customSubject = values.customSubject || customSubjects.join(", ");
+  return `<form id="studentForm" class="student-form" data-student-id="${escapeHtml(studentId)}" novalidate>
+    <div id="studentFormErrors" class="form-errors" role="alert" hidden></div>
+    <div class="student-form-grid">
+      <label>Student name / 學生姓名<input id="studentName" name="studentName" type="text" maxlength="100" required aria-describedby="studentNameError" value="${escapeHtml(values.studentName)}" /><span id="studentNameError" class="field-error" data-student-field-error="studentName" hidden></span></label>
+      <label>Chinese name / 中文姓名<input id="studentChineseName" name="chineseName" type="text" maxlength="100" aria-describedby="studentChineseNameError" value="${escapeHtml(values.chineseName)}" /><span id="studentChineseNameError" class="field-error" data-student-field-error="chineseName" hidden></span></label>
+      <label>School / 學校<input id="studentSchool" name="school" type="text" maxlength="150" required aria-describedby="studentSchoolError" value="${escapeHtml(values.school)}" /><span id="studentSchoolError" class="field-error" data-student-field-error="school" hidden></span></label>
+      <label>Level / 年級或程度<input id="studentSchoolYear" name="schoolYear" type="text" maxlength="100" required aria-describedby="studentSchoolYearError" placeholder="Year 10, S4, IGCSE, A Level" value="${escapeHtml(values.schoolYear)}" /><span id="studentSchoolYearError" class="field-error" data-student-field-error="schoolYear" hidden></span></label>
+      <fieldset class="student-form-wide student-subject-fieldset">
+        <legend>Subjects / 科目</legend>
+        <span class="subject-options" role="group" aria-label="Subjects / 科目" aria-describedby="studentSubjectsError">${COMMON_STUDENT_SUBJECTS.map((subject) => `<label><input type="checkbox" name="subjects" value="${escapeHtml(subject)}" ${commonSelections.includes(subject) || (subject === "Other" && otherSelected) ? "checked" : ""} ${subject === "Other" ? 'id="studentOtherSubject"' : ""} /> ${escapeHtml(subject)}</label>`).join("")}</span>
+        <span id="studentSubjectsError" class="field-error" data-student-field-error="subjects" hidden></span>
+      </fieldset>
+      <label id="customSubjectField" class="student-form-wide" ${otherSelected ? "" : "hidden"}>Custom subject / 自訂科目<input id="studentCustomSubject" name="customSubject" type="text" maxlength="100" value="${escapeHtml(customSubject)}" /></label>
+      <label class="student-form-wide">Contact number / 聯絡電話<input id="studentContactNumber" name="contactNumber" type="text" maxlength="30" aria-describedby="studentContactNumberError" value="${escapeHtml(values.contactNumber)}" /><span id="studentContactNumberError" class="field-error" data-student-field-error="contactNumber" hidden></span></label>
+    </div>
+    <div class="drawer-actions">
+      <button id="studentFormCancel" type="button" class="secondary-action">Cancel / 取消</button>
+      <button type="submit" data-student-form-action="save">${studentId ? "Save Changes / 儲存修改" : "Add Student / 新增學生"}</button>
+    </div>
+  </form>`;
+}
+
+function updateOtherSubjectField() {
+  const other = document.querySelector("#studentOtherSubject");
+  const field = document.querySelector("#customSubjectField");
+  if (field) field.hidden = !other?.checked;
+}
+
+function handleStudentFormSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const values = studentFormValuesFromForm(form);
+  const validation = validateStudentInput(values);
+  if (!validation.valid) {
+    showStudentFormErrors(form, validation.errors);
+    return;
+  }
+  const existingId = form.dataset.studentId || "";
+  const duplicate = findSimilarStudent(centreState.students, validation.values, existingId);
+  if (duplicate) {
+    openDuplicateStudentWarning(validation.values, duplicate, existingId);
+    return;
+  }
+  saveStudentRecord(validation.values, existingId);
+}
+
+function studentFormValuesFromForm(form) {
+  const data = new FormData(form);
+  const selected = [...form.querySelectorAll('input[name="subjects"]:checked')].map((input) => input.value);
+  const customSubject = text(data.get("customSubject"));
+  const subjects = unique([
+    ...selected.filter((subject) => subject !== "Other"),
+    ...(selected.includes("Other") && customSubject ? [customSubject] : [])
+  ]);
+  return {
+    studentName: data.get("studentName"),
+    chineseName: data.get("chineseName"),
+    school: data.get("school"),
+    schoolYear: data.get("schoolYear"),
+    subjects,
+    customSubject,
+    otherSelected: selected.includes("Other"),
+    contactNumber: data.get("contactNumber")
+  };
+}
+
+function showStudentFormErrors(form, errors) {
+  const errorList = Object.values(errors);
+  const panel = form.querySelector("#studentFormErrors");
+  panel.hidden = false;
+  panel.innerHTML = `<strong>Please review the highlighted fields.</strong><ul>${errorList.map((message) => `<li>${escapeHtml(message)}</li>`).join("")}</ul>`;
+  form.querySelectorAll("[aria-invalid]").forEach((input) => input.removeAttribute("aria-invalid"));
+  form.querySelectorAll("[data-student-field-error]").forEach((fieldError) => {
+    fieldError.hidden = true;
+    fieldError.textContent = "";
+  });
+  Object.entries(errors).forEach(([field, message]) => {
+    const selector = field === "subjects" ? 'input[name="subjects"]' : `[name="${field}"]`;
+    form.querySelectorAll(selector).forEach((input) => input.setAttribute("aria-invalid", "true"));
+    const fieldError = form.querySelector(`[data-student-field-error="${field}"]`);
+    if (fieldError) {
+      fieldError.hidden = false;
+      fieldError.textContent = message;
+    }
+  });
+  form.querySelector("[aria-invalid='true']")?.focus();
+}
+
+function openDuplicateStudentWarning(values, existingStudent, editingId) {
+  openStaffDrawer("A similar student already exists.", "Check the existing record before adding another student.", `
+    <div class="duplicate-student-warning">
+      <p><strong>Existing student:</strong><br>${escapeHtml(studentDisplayName(existingStudent))} · ${escapeHtml(existingStudent.school)} · ${escapeHtml(existingStudent.schoolYear)}</p>
+      <div class="drawer-actions">
+        <button id="useExistingStudent" type="button">Use Existing Student / 使用現有學生</button>
+        <button id="addStudentAnyway" type="button" class="secondary-action">Add Anyway / 仍然新增</button>
+        <button id="cancelDuplicateStudent" type="button" class="secondary-action">Cancel / 取消</button>
+      </div>
+    </div>`);
+  document.querySelector("#useExistingStudent")?.addEventListener("click", () => selectStudentForTest(existingStudent.studentId, "Existing student selected."));
+  document.querySelector("#addStudentAnyway")?.addEventListener("click", () => saveStudentRecord(values, editingId));
+  document.querySelector("#cancelDuplicateStudent")?.addEventListener("click", () => openStudentForm(editingId, values));
+}
+
+function saveStudentRecord(values, existingId = "") {
+  const now = new Date().toISOString();
+  let student;
+  if (existingId) {
+    student = centreState.students.find((item) => item.studentId === existingId);
+    if (!student) {
+      notify("error", "The selected student record could not be found.");
+      return;
+    }
+    Object.assign(student, values, { updatedAt: now, createdAt: student.createdAt || now });
+  } else {
+    student = {
+      studentId: generateNextStudentId(centreState.students),
+      ...values,
+      createdAt: now,
+      updatedAt: now
+    };
+    centreState.students.push(student);
+  }
+  selectedCentreStudentId = student.studentId;
+  const search = document.querySelector("#studentSearchInput");
+  if (search) search.value = "";
+  persistCentreState();
+  closeStaffDrawer();
+  renderStartTestModule();
+  notify("success", existingId ? "Student details updated and selected." : "Student added and selected.");
+}
+
+function selectStudentForTest(studentId, message) {
+  selectedCentreStudentId = studentId;
+  const search = document.querySelector("#studentSearchInput");
+  if (search) search.value = "";
+  closeStaffDrawer();
+  renderStartTestModule();
+  notify("success", message);
 }
 
 function renderQuestionFilters() {
@@ -2796,6 +3029,115 @@ function responseFor(sessionId, questionId) {
   return centreState.studentResponses.find((item) => item.testSessionId === sessionId && item.questionId === questionId);
 }
 
+function normaliseStudentSubjects(subjects, programme = "") {
+  const listedSubjects = Array.isArray(subjects) ? subjects.map(text).filter(Boolean) : [];
+  return unique(listedSubjects.length ? listedSubjects : text(programme) ? [text(programme)] : []);
+}
+
+function studentSubjectLabel(student) {
+  const subjects = normaliseStudentSubjects(student?.subjects, student?.programme);
+  return subjects.length ? subjects.join(" · ") : "No subject added";
+}
+
+function studentDisplayName(student) {
+  return [text(student?.studentName), text(student?.chineseName)].filter(Boolean).join(" ") || "Unnamed student";
+}
+
+function isRenderableStudent(student) {
+  return Boolean(student && text(student.studentId) && text(student.studentName));
+}
+
+function normaliseStudentMatch(value) {
+  return text(value).toLowerCase().replace(/\s+/g, " ");
+}
+
+function normaliseSubject(value) {
+  return normaliseStudentMatch(value).replace(/[()/_-]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function studentMatchesSearch(student, query) {
+  const search = normaliseStudentMatch(query);
+  if (!search) return true;
+  const haystack = [
+    student.studentId,
+    student.studentName,
+    student.chineseName,
+    student.school,
+    student.schoolYear,
+    studentSubjectLabel(student),
+    student.contactNumber
+  ].map(normaliseStudentMatch).join(" ");
+  return haystack.includes(search);
+}
+
+function generateNextStudentId(students) {
+  const existingIds = new Set((students || []).map((student) => text(student.studentId)));
+  const numbers = (students || []).map((student) => {
+    const match = /^STU-(\d+)$/.exec(String(student.studentId || ""));
+    return match ? Number(match[1]) : 0;
+  });
+  let next = Math.max(0, ...numbers) + 1;
+  let candidate = `STU-${String(next).padStart(4, "0")}`;
+  while (existingIds.has(candidate)) {
+    next += 1;
+    candidate = `STU-${String(next).padStart(4, "0")}`;
+  }
+  return candidate;
+}
+
+function validateStudentInput(input) {
+  const values = {
+    studentName: text(input?.studentName),
+    chineseName: text(input?.chineseName),
+    school: text(input?.school),
+    schoolYear: text(input?.schoolYear),
+    subjects: unique((input?.subjects || []).map(text).filter(Boolean)),
+    contactNumber: text(input?.contactNumber)
+  };
+  const errors = {};
+  if (!values.studentName) errors.studentName = "Student name / 學生姓名 is required.";
+  if (!values.school) errors.school = "School / 學校 is required.";
+  if (!values.schoolYear) errors.schoolYear = "Level / 年級或程度 is required.";
+  if (!values.subjects.length) errors.subjects = "Select at least one subject / 科目.";
+  if (input?.otherSelected && !text(input?.customSubject)) errors.subjects = "Enter a custom subject when Other is selected.";
+  if (values.studentName.length > 100) errors.studentName = "Student name must be 100 characters or fewer.";
+  if (values.chineseName.length > 100) errors.chineseName = "Chinese name must be 100 characters or fewer.";
+  if (values.school.length > 150) errors.school = "School must be 150 characters or fewer.";
+  if (values.schoolYear.length > 100) errors.schoolYear = "Level must be 100 characters or fewer.";
+  if (values.subjects.some((subject) => subject.length > 100)) errors.subjects = "Each subject must be 100 characters or fewer.";
+  if (values.contactNumber.length > 30) errors.contactNumber = "Contact number must be 30 characters or fewer.";
+  return { valid: !Object.keys(errors).length, errors, values };
+}
+
+function findSimilarStudent(students, candidate, excludeStudentId = "") {
+  const key = [candidate.studentName, candidate.school, candidate.schoolYear].map(normaliseStudentMatch).join("::");
+  if (!key.replaceAll("::", "")) return null;
+  return (students || []).find((student) => {
+    if (student.studentId === excludeStudentId) return false;
+    const studentKey = [student.studentName, student.school, student.schoolYear].map(normaliseStudentMatch).join("::");
+    return studentKey === key;
+  }) || null;
+}
+
+function testMatchesStudentSubjects(template, student) {
+  if (!student) return false;
+  const testSubject = normaliseSubject(template?.subjectName);
+  if (!testSubject) return false;
+  return normaliseStudentSubjects(student.subjects, student.programme).some((subject) => {
+    const studentSubject = normaliseSubject(subject);
+    return studentSubject === testSubject || studentSubject.includes(testSubject) || testSubject.includes(studentSubject);
+  });
+}
+
+function groupPublishedTestsForStudent(templates, student) {
+  const published = (templates || []).filter((template) => template.status === "Published");
+  if (!student) return { recommended: [], other: published };
+  return published.reduce((groups, template) => {
+    groups[testMatchesStudentSubjects(template, student) ? "recommended" : "other"].push(template);
+    return groups;
+  }, { recommended: [], other: [] });
+}
+
 function studentById(studentId) {
   return centreState.students.find((item) => item.studentId === studentId) || { studentName: "Unknown student", school: "" };
 }
@@ -4580,7 +4922,15 @@ const ReportCore = {
   createRevisedReportSnapshot,
   templateSummary,
   validateTestTemplate,
-  formatScientificText
+  formatScientificText,
+  normaliseStudentSubjects,
+  studentSubjectLabel,
+  studentMatchesSearch,
+  generateNextStudentId,
+  validateStudentInput,
+  findSimilarStudent,
+  groupPublishedTestsForStudent,
+  testMatchesStudentSubjects
 };
 
 if (typeof window !== "undefined") {

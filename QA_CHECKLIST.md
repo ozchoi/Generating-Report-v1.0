@@ -38,6 +38,18 @@ Run the static site through an HTTP server. Export a local backup before testing
 - Confirmation names the selected student.
 - Student selection clears after submission, cancellation, Begin, or return to dashboard.
 
+## Student Creation and Editing
+
+- In Run Test, `Add New Student / 新增學生` is visible, has a 44px or larger touch target, and opens the staff drawer without a browser prompt.
+- Student Name receives focus when the drawer opens; Escape closes the drawer on desktop and returns focus to the triggering action.
+- Empty submission displays inline required errors for Student Name, School, Level and Subjects without creating a record.
+- Add a student with more than one subject and confirm that its generated `STU-` ID, English and Chinese names, school, level and subject list appear in search results.
+- Search by student ID, Chinese name, subject, school, level and contact number; each matching student remains selectable.
+- Add the same normalised name, school and level again. Confirm the duplicate warning can select the existing record, return to the form, or explicitly add another record.
+- After saving, the new student is selected, Step 3 updates immediately and matching published tests are listed under Recommended while other published tests remain available.
+- Edit Student updates school, subjects and the Step 3 confirmation without changing the Student ID or removing assessment records.
+- Check the drawer at desktop, iPad landscape and iPad portrait widths; fields and actions remain visible without horizontal scrolling.
+
 ## Prepare Versus Begin
 
 - Prepare creates a `Prepared` session with frozen questions.
@@ -134,6 +146,10 @@ For every row, record `Works`, `Disabled with reason`, or `Not applicable`.
 | Module navigation | Opens the selected module only | |
 | Dashboard quick actions | Opens the requested workflow module | |
 | Student selection | Explicitly selects one student | |
+| Add New Student | Opens the accessible student form | |
+| Add Student / Save Changes | Validates, persists and selects the record | |
+| Duplicate student actions | Uses existing record, returns to form or explicitly adds anyway | |
+| Edit Student | Updates supported student fields without changing ID | |
 | Test selection | Selects a published assessment | |
 | Prepare Test | Creates Prepared session without timer | |
 | Begin Test | Starts timer and first question | |
