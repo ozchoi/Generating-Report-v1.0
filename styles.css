@@ -1791,7 +1791,7 @@ h1 {
   font-weight: 700;
 }
 
-.report-print-footer {
+.print-report-footer {
   margin-top: 8mm;
   border-top: 1px solid #d8dee8;
   padding-top: 3mm;
@@ -1943,7 +1943,7 @@ h1 {
 @media print {
   @page {
     size: A4 portrait;
-    margin: 10mm;
+    margin: 7mm;
   }
 
   html,
@@ -1968,6 +1968,11 @@ h1 {
     background: #fff;
   }
 
+  #printRoot {
+    font-size: 8pt;
+    line-height: 1.25;
+  }
+
   #printRoot,
   #printRoot * {
     visibility: visible !important;
@@ -1981,27 +1986,80 @@ h1 {
     display: none !important;
   }
 
-  h1 {
-    font-size: 20pt;
+  #printRoot h1 {
+    margin: 0 0 2mm;
+    font-size: 16pt;
   }
 
-  #printRoot .report-print-header h1 {
-    font-size: 18pt;
+  #printRoot h2 {
+    margin: 0 0 1.5mm;
+    font-size: 10.5pt;
+  }
+
+  #printRoot h3 {
+    font-size: 8.5pt;
+  }
+
+  #printRoot .print-sheet {
+    min-height: 283mm;
+    break-after: page;
+    page-break-after: always;
+  }
+
+  #printRoot .print-sheet:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
+  #printRoot .print-sheet-overview {
+    display: grid;
+    gap: 3mm;
+  }
+
+  #printRoot .print-sheet-score {
+    display: grid;
+    gap: 3mm;
+  }
+
+  #printRoot .print-sheet-evidence {
+    display: grid;
+    gap: 3mm;
   }
 
   #printRoot .summary-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 6mm;
+    gap: 2.5mm;
+  }
+
+  #printRoot .print-sheet-overview .summary-grid article {
+    min-height: 0;
+    padding: 3mm;
+  }
+
+  #printRoot .print-sheet-overview .summary-grid span {
+    font-size: 6.8pt;
+  }
+
+  #printRoot .print-sheet-overview .summary-grid strong {
+    font-size: 12pt;
+    line-height: 1.05;
+  }
+
+  #printRoot .print-sheet-overview .summary-grid small {
+    font-size: 7pt;
+    line-height: 1.2;
   }
 
   #printRoot .chart-layout {
     display: block;
   }
 
-  #printRoot .chart-panel,
-  #printRoot .report-panel,
-  #printRoot .summary-grid article {
+  #printRoot .summary-grid article,
+  #printRoot .annotation-card,
+  #printRoot tr,
+  #printRoot .print-mini-chart,
+  #printRoot .boundary-summary div {
     box-shadow: none;
     break-inside: avoid;
     page-break-inside: avoid;
@@ -2009,8 +2067,11 @@ h1 {
 
   #printRoot .chart-panel,
   #printRoot .report-panel {
-    margin-bottom: 6mm;
-    padding: 4mm;
+    margin-bottom: 0;
+    min-height: auto !important;
+    border-radius: 2mm;
+    padding: 3mm;
+    box-shadow: none;
   }
 
   #printRoot .chart-frame,
@@ -2029,7 +2090,21 @@ h1 {
   }
 
   #printRoot .print-radar-grid {
-    gap: 6mm;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 3mm;
+  }
+
+  #printRoot .print-mini-chart {
+    min-width: 0;
+  }
+
+  #printRoot .print-progress-panel .chart-frame {
+    max-height: 53mm;
+  }
+
+  #printRoot .print-score-panel .chart-frame {
+    max-height: 78mm;
   }
 
   #printRoot .table-wrap {
@@ -2041,10 +2116,6 @@ h1 {
     min-width: 0;
     font-size: 8.5pt;
     page-break-inside: auto;
-  }
-
-  #printRoot tr {
-    page-break-inside: avoid;
   }
 
   #printRoot .insight-table,
@@ -2069,22 +2140,26 @@ h1 {
   #printRoot .status-pill,
   #printRoot .confidence-pill {
     min-height: 20px;
-    padding: 0 6px;
-    font-size: 7.5pt;
+    max-width: 100%;
+    padding: 0 4px;
+    font-size: 6.5pt;
+    line-height: 1.1;
+    white-space: normal;
   }
 
   #printRoot .boundary-summary {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 2mm;
   }
 
   #printRoot .summary-grid strong,
   #printRoot .boundary-summary strong,
   #printRoot .difficulty-note strong {
-    font-size: 12pt;
+    font-size: 10pt;
   }
 
-  #printRoot .panel-heading h2 {
-    font-size: 11pt;
+  #printRoot .panel-heading {
+    margin-bottom: 2mm;
   }
 
   #printRoot .panel-heading p,
@@ -2092,18 +2167,109 @@ h1 {
   #printRoot .topic-detail p,
   #printRoot .boundary-target,
   #printRoot .difficulty-note p {
-    font-size: 8.5pt;
+    font-size: 7pt;
+    line-height: 1.2;
   }
 
   #printRoot .print-chart-image {
-    max-height: 120mm;
+    width: 100%;
+    height: auto;
     object-fit: contain;
+  }
+
+  #printRoot .print-chart-progress {
+    max-height: 53mm;
+  }
+
+  #printRoot .print-chart-radar {
+    max-height: 61mm;
+  }
+
+  #printRoot .print-chart-standard {
+    max-height: 78mm;
+  }
+
+  #printRoot .print-sheet-score .annotation-grid,
+  #printRoot .print-sheet-score .boundary-summary {
+    gap: 2mm;
+  }
+
+  #printRoot .print-sheet-score .boundary-summary div,
+  #printRoot .print-sheet-score .annotation-card,
+  #printRoot .print-sheet-score .difficulty-note {
+    padding: 2.5mm;
+  }
+
+  #printRoot .print-sheet-score .difficulty-table {
+    font-size: 7.5pt;
+  }
+
+  #printRoot .print-topic-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 7pt;
+    line-height: 1.12;
+  }
+
+  #printRoot .print-topic-table th,
+  #printRoot .print-topic-table td {
+    padding: 1.4mm 1mm;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+  }
+
+  #printRoot .print-topic-table th {
+    font-size: 6.8pt;
+    line-height: 1.05;
+  }
+
+  #printRoot .print-topic-table .numeric-cell {
+    white-space: nowrap;
+    text-align: center;
+  }
+
+  #printRoot .print-topic-note {
+    margin: 2.5mm 0 0;
+    color: #667085;
+    font-size: 7pt;
+  }
+
+  #printRoot .print-sheet-evidence .chart-panel {
+    margin-bottom: 0;
+  }
+
+  #printRoot .print-sheet-evidence .boundary-summary div {
+    padding: 2.5mm;
+  }
+
+  #printRoot .print-error-panel .difficulty-table,
+  #printRoot .print-heatmap-panel .heatmap-table {
+    font-size: 7pt;
+  }
+
+  #printRoot .print-error-panel .difficulty-table th,
+  #printRoot .print-error-panel .difficulty-table td,
+  #printRoot .print-heatmap-panel .heatmap-table th,
+  #printRoot .print-heatmap-panel .heatmap-table td {
+    padding: 1.5mm;
   }
 
   #printRoot .report-print-narrative {
     display: block;
     white-space: pre-wrap;
-    font-size: 9.5pt;
-    line-height: 1.45;
+    font-size: 9pt;
+    line-height: 1.35;
+  }
+
+  #printRoot .print-report-footer {
+    margin-top: 4mm;
+    border-top: 0.2mm solid #d0d5dd;
+    padding-top: 2mm;
+    color: #667085;
+    font-size: 6.8pt;
+    line-height: 1.2;
+    break-before: avoid;
+    page-break-before: avoid;
   }
 }

@@ -624,7 +624,7 @@ test("static source exposes repaired controls and optional dependency fallbacks"
   assert.ok(app.includes("typeof XLSX"));
   assert.ok(html.includes("Centre-operated assessment system"));
   assert.ok(html.includes("Question Bank / 題目庫"));
-  assert.ok(html.includes("?v=1.5.1"));
+  assert.ok(html.includes("?v=1.5.2"));
   assert.ok(html.includes('<section id="printableReport" hidden>'));
   assert.ok(html.includes('<section id="printRoot" class="print-root" aria-hidden="true"></section>'));
   assert.ok(html.includes('id="reportModuleMount"'));
@@ -634,6 +634,9 @@ test("static source exposes repaired controls and optional dependency fallbacks"
   assert.ok(app.includes("buildPrintableReportClone"));
   assert.ok(app.includes("printActiveReport"));
   assert.ok(app.includes("canvasToPrintImage"));
+  assert.ok(app.includes("buildPrintContext"));
+  assert.ok(app.includes("validatePrintContext"));
+  assert.ok(app.includes('printSheet("overview")'));
   assert.ok(html.includes("Prepare Test / 準備測驗"));
   assert.ok(html.includes("Begin Test / 正式開始"));
   assert.ok(html.includes("Public prototype only."));

@@ -7,7 +7,7 @@ let chromium;
 try {
   ({ chromium } = require("playwright"));
 } catch (error) {
-  console.error("Playwright is required for the v1.5.1 workflow test.");
+  console.error("Playwright is required for the v1.5.2 workflow test.");
   console.error("Set NODE_PATH to the bundled runtime node_modules or install Playwright before running this test.");
   process.exit(1);
 }
@@ -27,7 +27,7 @@ function createServer() {
     const relativePath = requestUrl.pathname === "/" ? "index.html" : requestUrl.pathname.slice(1);
     if (relativePath === "deployment.json") {
       response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ version: "1.5.1", sha: "test", deployedAt: "test" }));
+      response.end(JSON.stringify({ version: "1.5.2", sha: "test", deployedAt: "test" }));
       return;
     }
     if (relativePath === "favicon.ico") {
@@ -312,7 +312,7 @@ async function runPortraitLayout(browser, baseUrl) {
     await runCompleteFlow(browser, baseUrl, { width: 768, height: 1024 });
     await runRecoveryFlow(browser, baseUrl);
     await runPortraitLayout(browser, baseUrl);
-    console.log("PASS v1.5.1 desktop and iPad assessment workflows");
+    console.log("PASS v1.5.2 desktop and iPad assessment workflows");
   } finally {
     await browser.close();
     await new Promise((resolve) => server.close(resolve));

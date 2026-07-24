@@ -41,7 +41,7 @@ function createServer() {
 
     if (relativePath === "deployment.json") {
       response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ version: "1.5.1", sha: "test", deployedAt: "test" }));
+      response.end(JSON.stringify({ version: "1.5.2", sha: "test", deployedAt: "test" }));
       return;
     }
 

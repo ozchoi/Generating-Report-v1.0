@@ -17,7 +17,7 @@ const buttonIssues = [...buttonTags(index), ...buttonTags(app)].filter((tag) => 
 assert.equal(buttonIssues.length, 0, `Buttons missing an intentional action: ${buttonIssues.join(", ")}`);
 assert.ok(index.includes("Centre-operated assessment system"));
 assert.ok(index.includes("Question Bank / 題目庫"));
-assert.ok(index.includes("?v=1.5.1"));
+assert.ok(index.includes("?v=1.5.2"));
 assert.ok(index.includes('<section id="printableReport" hidden>'));
 assert.ok(index.includes('<section id="printRoot" class="print-root" aria-hidden="true"></section>'));
 assert.ok(index.includes('id="reportModuleMount"'));
@@ -27,6 +27,9 @@ assert.ok(app.includes("resizeReportCharts();"));
 assert.ok(app.includes("buildPrintableReportClone"));
 assert.ok(app.includes("printActiveReport"));
 assert.ok(app.includes("canvasToPrintImage"));
+assert.ok(app.includes("buildPrintContext"));
+assert.ok(app.includes("validatePrintContext"));
+assert.ok(app.includes('printSheet("overview")'));
 assert.ok(app.includes("data-question-action=\"preview\""));
 assert.ok(app.includes("data-question-action=\"duplicate\""));
 assert.ok(app.includes("data-question-action=\"add-to-test\""));

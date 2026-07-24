@@ -1,4 +1,5 @@
 const assert = require("assert");
+const childProcess = require("child_process");
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
@@ -7,13 +8,17 @@ let chromium;
 try {
   ({ chromium } = require("playwright"));
 } catch (error) {
-  console.error("Playwright is required for the v1.5.1 report print test.");
+  console.error("Playwright is required for the v1.5.2 report print test.");
   process.exit(1);
 }
 
 const root = path.join(__dirname, "..");
 const outputDir = path.join(root, "test-output");
-const pdfPath = path.join(outputDir, "report.pdf");
+const renderedDir = path.join(outputDir, "rendered-pages-v1.5.2");
+const pdfPath = path.join(outputDir, "student-performance-report-v1.5.2.pdf");
+const bundledRoot = path.join(process.env.HOME || "", ".cache/codex-runtimes/codex-primary-runtime/dependencies");
+const pythonExecutable = process.env.PYTHON || (fs.existsSync(path.join(bundledRoot, "python/bin/python3")) ? path.join(bundledRoot, "python/bin/python3") : "python3");
+const pdftoppmExecutable = process.env.PDFTOPPM || (fs.existsSync(path.join(bundledRoot, "bin/override/pdftoppm")) ? path.join(bundledRoot, "bin/override/pdftoppm") : "pdftoppm");
 const contentTypes = {
   ".css": "text/css",
   ".html": "text/html",
@@ -28,7 +33,7 @@ function createServer() {
     const relativePath = requestUrl.pathname === "/" ? "index.html" : requestUrl.pathname.slice(1);
     if (relativePath === "deployment.json") {
       response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ version: "1.5.1", sha: "test", deployedAt: "test" }));
+      response.end(JSON.stringify({ version: "1.5.2", sha: "test", deployedAt: "test" }));
       return;
     }
     if (relativePath === "favicon.ico") {
@@ -136,6 +141,44 @@ async function preparePrintRoot(page, selector = "#printReportInline") {
   await page.waitForFunction(() => document.querySelector("#printRoot")?.children.length > 0);
 }
 
+function extractPdfPages(pdfFile) {
+  const script = `
+import json, pdfplumber, sys
+with pdfplumber.open(sys.argv[1]) as pdf:
+    print(json.dumps([page.extract_text() or "" for page in pdf.pages]))
+`;
+  const result = childProcess.spawnSync(pythonExecutable, ["-c", script, pdfFile], { encoding: "utf8" });
+  if (result.error || result.status !== 0) {
+    throw result.error || new Error(result.stderr || "PDF text extraction failed");
+  }
+  return JSON.parse(result.stdout);
+}
+
+function renderPdfPages(pdfFile) {
+  fs.rmSync(renderedDir, { recursive: true, force: true });
+  fs.mkdirSync(renderedDir, { recursive: true });
+  const prefix = path.join(renderedDir, "page");
+  const result = childProcess.spawnSync(pdftoppmExecutable, ["-png", "-r", "130", pdfFile, prefix], { encoding: "utf8" });
+  if (result.error || result.status !== 0) {
+    throw result.error || new Error(result.stderr || "PDF rendering failed");
+  }
+  return fs.readdirSync(renderedDir).filter((file) => file.endsWith(".png")).sort().map((file) => path.join(renderedDir, file));
+}
+
+function countOccurrences(source, needle) {
+  return (source.match(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length;
+}
+
+function pageIncludes(source, needle) {
+  const normalise = (value) => value.toLowerCase().replace(/\s+/g, " ").trim();
+  return normalise(source).includes(normalise(needle));
+}
+
+function pageContainsTopic(source, topic) {
+  const normalisedSource = source.toLowerCase();
+  return topic.toLowerCase().split(/\s+/).every((word) => normalisedSource.includes(word));
+}
+
 async function runReportPrintFlow(browser, baseUrl) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 950 } });
   await context.addInitScript(() => localStorage.clear());
@@ -148,44 +191,96 @@ async function runReportPrintFlow(browser, baseUrl) {
   await openFirstReport(page);
   await preparePrintRoot(page);
 
+  const printState = await page.evaluate(() => {
+    const snapshot = centreState.reportSnapshots.find((report) => report.id === activeReportSnapshotId);
+    return {
+      reportId: activeReportSnapshotId,
+      printRootReportId: document.querySelector("#printRoot")?.dataset.reportId,
+      printRootStudentId: document.querySelector("#printRoot")?.dataset.studentId,
+      printRootSubject: document.querySelector("#printRoot")?.dataset.subject,
+      snapshotStudentId: snapshot.studentId,
+      snapshotSubject: snapshot.subjectName,
+      evidenceStudentId: snapshot.evidenceJson.student.id,
+      evidenceSubject: snapshot.evidenceJson.subject.name,
+      assessmentCount: snapshot.evidenceJson.dataQuality.assessmentCount,
+      progressPoints: snapshot.evidenceJson.overallProgress.assessments.length,
+      latestMark: `${snapshot.evidenceJson.latestAssessment.markAwarded}/${snapshot.evidenceJson.latestAssessment.maximumMark}`,
+      topicNames: snapshot.evidenceJson.topicProfile.map((topic) => topic.label),
+      narrative: snapshot.editedNarrative || snapshot.generatedNarrative
+    };
+  });
+  assert.equal(printState.printRootReportId, printState.reportId);
+  assert.equal(printState.printRootStudentId, printState.snapshotStudentId);
+  assert.equal(printState.printRootSubject, printState.snapshotSubject);
+  assert.equal(printState.evidenceStudentId, printState.snapshotStudentId);
+  assert.equal(printState.evidenceSubject, printState.snapshotSubject);
+  assert.equal(printState.assessmentCount, printState.progressPoints);
+
   const printText = await page.textContent("#printRoot");
   assert.ok(printText.includes("Student Performance Report"));
   assert.ok(printText.includes("Demo Student A"));
   assert.ok(printText.includes("Chemistry"));
-  assert.ok(printText.includes("34/48"));
-  assert.ok(printText.includes("Demo Student A — Chemistry Baseline Report"));
-  assert.ok(printText.includes("Topic Performance and Learning Priorities"));
-  assert.ok(await page.locator("#printRoot table").count() >= 1);
-
-  const images = await page.$$eval("#printRoot img.print-chart-image", (items) => items.map((image) => image.src));
-  assert.ok(images.some((src) => src.startsWith("data:image/png") && src.length > 1000));
+  assert.ok(printText.includes(printState.latestMark));
+  assert.equal(printText.includes("Siu Ming"), false);
+  assert.equal(await page.locator("#printRoot .report-print-narrative").count(), 1);
+  assert.equal(await page.locator("#printRoot .print-sheet").count(), 5);
+  assert.equal(await page.locator("#printRoot .print-topic-table tbody tr").count(), 12);
+  assert.ok(await page.locator("#printRoot img.print-chart-image").count() >= 3);
 
   await page.emulateMedia({ media: "print" });
   const printBox = await page.locator("#printRoot").boundingBox();
   assert.ok(printBox && printBox.width > 500 && printBox.height > 500);
   assert.equal(await page.locator(".app-shell").boundingBox(), null);
-  assert.ok(await page.locator("#printRoot").getByText("Student Performance Report").isVisible());
 
   fs.mkdirSync(outputDir, { recursive: true });
-  await page.pdf({ path: pdfPath, format: "A4", printBackground: true });
+  await page.pdf({
+    path: pdfPath,
+    format: "A4",
+    printBackground: true,
+    preferCSSPageSize: true,
+    margin: { top: "0", right: "0", bottom: "0", left: "0" }
+  });
   const pdfSize = fs.statSync(pdfPath).size;
   assert.ok(pdfSize > 20 * 1024, `Expected printed PDF to be larger than 20 KB; got ${pdfSize}`);
-  await page.emulateMedia({ media: "screen" });
+  const pages = extractPdfPages(pdfPath);
+  const allText = pages.join("\n");
+  assert.equal(pages.length, 5);
 
+  assert.ok(pageIncludes(pages[0], "Student Performance Report"));
+  assert.ok(pageIncludes(pages[0], "Latest Assessment"));
+  assert.ok(pageIncludes(pages[0], "Assessment Progress"));
+  assert.ok(pageIncludes(pages[0], "By Topic"));
+  assert.ok(pageIncludes(pages[0], "By Question Type"));
+
+  assert.ok(pageIncludes(pages[1], "Assessment Score Overview"));
+  assert.ok(pageIncludes(pages[1], "Performance by Question Difficulty"));
+
+  assert.ok(pageIncludes(pages[2], "Topic Performance and Learning Priorities"));
+  printState.topicNames.forEach((topic) => {
+    assert.ok(pageContainsTopic(pages[2], topic), `Expected topic on page 3: ${topic}`);
+  });
+
+  assert.ok(pageIncludes(pages[3], "Evidence Coverage"));
+  assert.ok(pageIncludes(pages[3], "Mark-Loss Patterns"));
+  assert.ok(pageIncludes(pages[3], "Topic Performance Across Assessments"));
+
+  assert.ok(pageIncludes(pages[4], "Student Performance Summary"));
+  assert.ok(pageIncludes(pages[4], "Page generated from the centre assessment prototype."));
+  assert.equal(countOccurrences(allText, "Student Performance Summary"), 1);
+  assert.equal(countOccurrences(allText, printState.narrative.split("\n").find(Boolean)), 1);
+  assert.equal(allText.includes("Siu Ming"), false);
+  assert.ok(allText.includes(printState.latestMark));
+
+  const renderedPages = renderPdfPages(pdfPath);
+  assert.equal(renderedPages.length, 5);
+
+  await page.emulateMedia({ media: "screen" });
   await page.click("#exportPdf");
   await page.waitForFunction(() => window.__printCount >= 2);
-  assert.ok((await page.textContent("#printRoot")).includes("Student Performance Report"));
+  assert.equal(await page.evaluate(() => document.querySelector("#printRoot")?.dataset.reportId === activeReportSnapshotId), true);
 
   await page.evaluate(() => {
     cleanupPrintedReport();
-    const trend = document.querySelector("#trendChart");
-    if (trend) {
-      trend.width = 0;
-      trend.height = 0;
-      trend.toDataURL = () => {
-        throw new Error("Deliberately broken chart for print test");
-      };
-    }
     window.Chart = function BrokenPrintChart() {
       throw new Error("Deliberately broken temporary chart render");
     };
@@ -193,11 +288,11 @@ async function runReportPrintFlow(browser, baseUrl) {
   await preparePrintRoot(page);
   const fallbackText = await page.textContent("#printRoot");
   assert.ok(fallbackText.includes("Chart unavailable. The table evidence below remains available."));
-  assert.ok(fallbackText.includes("Demo Student A — Chemistry Baseline Report"));
+  assert.ok(fallbackText.includes("Demo Student A"));
 
   assert.deepEqual(errors, []);
   await context.close();
-  return pdfSize;
+  return { pdfSize, pageCount: pages.length, renderedPages };
 }
 
 (async () => {
@@ -206,8 +301,9 @@ async function runReportPrintFlow(browser, baseUrl) {
   const browser = await chromium.launch({ headless: true });
   const baseUrl = `http://127.0.0.1:${server.address().port}/`;
   try {
-    const pdfSize = await runReportPrintFlow(browser, baseUrl);
-    console.log(`PASS v1.5.1 report print and PDF workflow (${pdfSize} bytes)`);
+    const { pdfSize, pageCount, renderedPages } = await runReportPrintFlow(browser, baseUrl);
+    console.log(`PASS v1.5.2 report print layout (${pageCount} pages, ${pdfSize} bytes)`);
+    console.log(`Rendered pages: ${renderedPages.join(", ")}`);
   } finally {
     await browser.close();
     await new Promise((resolve) => server.close(resolve));

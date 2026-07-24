@@ -55,7 +55,7 @@ const DIFFICULTY_WEIGHTS = {
   "Exam-style": 1.4,
   Challenge: 1.5
 };
-const APP_VERSION = "1.5.1";
+const APP_VERSION = "1.5.2";
 const CENTRE_STORAGE_VERSION = 3;
 const CENTRE_STORAGE_KEY = "abilityReportCentreSystemV3";
 const PREVIOUS_CENTRE_STORAGE_KEYS = ["abilityReportCentreSystemV2", "abilityReportCentreSystemV1"];
@@ -2765,125 +2765,389 @@ async function printActiveReport({ saveAsPdf = false } = {}) {
 
 async function buildPrintableReportClone() {
   const snapshot = getActiveReportSnapshot();
-  const source = document.querySelector("#printableReport");
   const printRoot = document.querySelector("#printRoot");
+  const printContext = buildPrintContext(snapshot);
 
-  if (!snapshot || !source || !printRoot) {
+  if (!snapshot || !printRoot) {
     throw new Error("Open a report before printing.");
   }
 
-  updateReportNarrativeMirror();
+  validatePrintContext(printContext);
 
-  const clone = source.cloneNode(true);
-  clone.id = "printableReportClone";
-  clone.hidden = false;
-  clone.removeAttribute("aria-hidden");
+  const sheets = buildPrintSheets(printContext).filter(hasMeaningfulPrintContent);
+  if (!sheets.length) throw new Error("The selected report has no printable content.");
 
-  replaceReportTextareaWithPrintableNarrative(clone, snapshot);
-  replaceReportCanvasesWithImages(clone);
-  clone.prepend(buildPrintReportHeader(snapshot));
-  clone.append(buildPrintReportFooter());
-
-  clone.querySelectorAll(".staff-only, button, input, select, textarea, #radarModeControls, #topicDetail").forEach((element) => {
-    element.remove();
-  });
-  clone.querySelectorAll("[id]").forEach((element) => {
-    element.id = `${element.id}-print`;
-  });
-
-  printRoot.replaceChildren(clone);
+  printRoot.replaceChildren(...sheets);
   printRoot.setAttribute("aria-hidden", "false");
+  printRoot.dataset.reportId = printContext.reportId;
+  printRoot.dataset.studentId = printContext.studentId;
+  printRoot.dataset.subject = printContext.subjectName;
 
-  return clone;
-}
-
-function replaceReportTextareaWithPrintableNarrative(clone, snapshot) {
-  const narrative = getPrintableReportNarrative(snapshot);
-  const printableNarrative = document.createElement("div");
-  printableNarrative.className = "report-print-narrative";
-  printableNarrative.textContent = narrative;
-
-  const textarea = clone.querySelector("#reportText");
-  const mirror = clone.querySelector("#reportPrintNarrative");
-
-  if (textarea) {
-    textarea.replaceWith(printableNarrative);
-  } else if (mirror) {
-    mirror.replaceWith(printableNarrative);
-  } else {
-    clone.append(printableNarrative);
+  const narratives = printRoot.querySelectorAll(".report-print-narrative");
+  if (narratives.length !== 1) {
+    throw new Error(`Expected one printable narrative, found ${narratives.length}.`);
   }
 
-  if (mirror?.isConnected) mirror.remove();
+  return printRoot;
 }
 
-function getPrintableReportNarrative(snapshot) {
-  const visibleText = elements.reportText?.value;
-  if (text(visibleText)) return visibleText;
-  return snapshot.editedNarrative || snapshot.generatedNarrative || "";
+function buildPrintContext(snapshot) {
+  if (!snapshot) {
+    throw new Error("A report snapshot must be selected before printing.");
+  }
+  return {
+    reportId: snapshot.id,
+    studentId: snapshot.studentId,
+    subjectName: snapshot.subjectName,
+    versionNumber: snapshot.versionNumber || 1,
+    status: snapshot.status,
+    createdAt: snapshot.createdAt,
+    finalisedAt: snapshot.finalisedAt || "",
+    evidence: structuredCloneSafe(snapshot.evidenceJson),
+    narrative: snapshot.editedNarrative || snapshot.generatedNarrative || ""
+  };
 }
 
-function buildPrintReportHeader(snapshot) {
+function validatePrintContext(printContext) {
+  const errors = [];
+  const evidenceJson = printContext.evidence || {};
+  const latest = evidenceJson.latestAssessment;
+  const assessmentHistory = evidenceJson.overallProgress?.assessments || [];
+  const assessmentCount = Number(evidenceJson.dataQuality?.assessmentCount);
+
+  if (!printContext.reportId) errors.push("Report ID is missing.");
+  if (!studentById(printContext.studentId)?.studentName) errors.push("Student record is missing.");
+  if (!printContext.subjectName) errors.push("Subject is missing.");
+  if (!latest) errors.push("Latest assessment evidence is missing.");
+  if (!text(printContext.narrative)) errors.push("Report narrative is missing.");
+  if (Number.isFinite(assessmentCount) && assessmentCount !== assessmentHistory.length) {
+    errors.push("Assessment count does not match the assessment history.");
+  }
+  if (evidenceJson.student?.id !== printContext.studentId) {
+    errors.push("Header student does not match evidence student.");
+  }
+  if (evidenceJson.subject?.name !== printContext.subjectName) {
+    errors.push("Header subject does not match evidence subject.");
+  }
+  if (!Number.isFinite(Number(latest?.markAwarded)) || !Number.isFinite(Number(latest?.maximumMark))) {
+    errors.push("Latest assessment score is invalid.");
+  }
+
+  if (errors.length) {
+    throw new Error(`Print report data validation failed: ${errors.join(" ")}`);
+  }
+}
+
+function buildPrintSheets(printContext) {
+  return [
+    buildOverviewPrintSheet(printContext),
+    buildScorePrintSheet(printContext),
+    buildTopicPrintSheet(printContext),
+    buildEvidencePrintSheet(printContext),
+    buildSummaryPrintSheet(printContext)
+  ];
+}
+
+function buildOverviewPrintSheet(printContext) {
+  const sheet = printSheet("overview");
+  sheet.append(
+    buildPrintReportHeader(printContext),
+    buildPrintSummaryGrid(printContext),
+    buildPrintChartPanel("Assessment Progress", "One point per fully marked assessment.", buildProgressPrintImage(printContext), "print-progress-panel")
+  );
+  const radarPanel = document.createElement("article");
+  radarPanel.className = "chart-panel print-radar-panel";
+  radarPanel.innerHTML = `
+    <div class="panel-heading"><div><h2>Performance Profile / 表現概覽</h2><p>Topic and question-type profiles from the selected report snapshot.</p></div></div>
+    <div class="print-radar-grid"></div>`;
+  const radarGrid = radarPanel.querySelector(".print-radar-grid");
+  radarGrid.append(
+    buildPrintMiniChart("By Topic", buildRadarPrintImage(printContext.evidence.topicProfile, "Topic ability", "Topic performance radar chart")),
+    buildPrintMiniChart("By Question Type", buildRadarPrintImage(printContext.evidence.questionTypeProfile, "Question-type ability", "Question type performance radar chart"))
+  );
+  sheet.append(radarPanel);
+  return sheet;
+}
+
+function buildScorePrintSheet(printContext) {
+  const report = printContext.evidence;
+  const sheet = printSheet("score");
+  sheet.append(
+    buildPrintChartPanel("Assessment Score Overview / 測驗成績概覽", report.gradeEvidence.message, buildScorePrintImage(printContext), "print-score-panel"),
+    buildPrintBoundaryDistance(report),
+    buildPrintAnnotations(report),
+    buildDifficultyPrintPanel(report)
+  );
+  return sheet;
+}
+
+function buildTopicPrintSheet(printContext) {
+  const sheet = printSheet("topics");
+  const panel = document.createElement("article");
+  panel.className = "chart-panel wide-panel print-topic-panel";
+  panel.innerHTML = `
+    <div class="panel-heading"><div><h2>Topic Performance and Learning Priorities<br />課題表現及學習重點</h2><p>Compact print view for topic accuracy, challenge weighting, evidence and status.</p></div></div>
+    <div class="table-wrap">${compactTopicTable(printContext.evidence.topicProfile)}</div>
+    <p class="print-topic-note">Topic insights are based on the available marked evidence. Emerging patterns should be confirmed through further assessments.</p>`;
+  sheet.append(panel);
+  return sheet;
+}
+
+function buildEvidencePrintSheet(printContext) {
+  const report = printContext.evidence;
+  const sheet = printSheet("evidence");
+  sheet.append(
+    buildDataQualityPrintPanel(report),
+    buildErrorPatternPrintPanel(report),
+    buildHeatmapPrintPanel(report)
+  );
+  return sheet;
+}
+
+function buildSummaryPrintSheet(printContext) {
+  const sheet = printSheet("summary");
+  const panel = document.createElement("article");
+  panel.className = "report-panel print-summary-panel";
+  const narrative = document.createElement("div");
+  narrative.className = "report-print-narrative";
+  narrative.textContent = printContext.narrative;
+  panel.innerHTML = `
+    <div class="panel-heading"><div><h2>Student Performance Summary<br />學生表現摘要</h2><p>Generated from the selected immutable report snapshot.</p></div></div>`;
+  panel.append(narrative);
+  sheet.append(panel, buildPrintReportFooter());
+  return sheet;
+}
+
+function printSheet(name) {
+  const sheet = document.createElement("section");
+  sheet.className = `print-sheet print-sheet-${name}`;
+  return sheet;
+}
+
+function hasMeaningfulPrintContent(sheet) {
+  return Boolean(text(sheet.textContent) || sheet.querySelector("img, table"));
+}
+
+function buildPrintReportHeader(printContext) {
   const header = document.createElement("header");
   header.className = "report-print-header";
-  const student = studentById(snapshot.studentId);
-  const evidenceJson = snapshot.evidenceJson || {};
+  const student = studentById(printContext.studentId);
+  const evidenceJson = printContext.evidence || {};
   const latest = evidenceJson.latestAssessment || {};
   const latestScore = Number.isFinite(Number(latest.markAwarded)) && Number.isFinite(Number(latest.maximumMark))
     ? `${round1(latest.markAwarded)}/${round1(latest.maximumMark)}${Number.isFinite(Number(latest.percentage)) ? ` (${Math.round(latest.percentage)}%)` : ""}`
     : "";
   const latestAssessment = [
-    latest.assessmentName || evidenceJson.latestSession?.testName || snapshot.testName || "Selected assessment",
+    latest.assessmentName || evidenceJson.latestSession?.testName || "Selected assessment",
     latestScore
   ].filter(Boolean).join(" - ");
-  const generatedDate = snapshot.finalisedAt || snapshot.updatedAt || snapshot.createdAt || "";
+  const generatedDate = printContext.finalisedAt || printContext.createdAt || "";
 
   header.innerHTML = `
     <h1>Student Performance Report</h1>
     <dl>
       <div><dt>Student:</dt><dd>${escapeHtml(student?.studentName || evidenceJson.student?.name || "Selected student")}</dd></div>
-      <div><dt>Subject:</dt><dd>${escapeHtml(snapshot.subjectName || evidenceJson.subject?.name || "Selected subject")}</dd></div>
+      <div><dt>Subject:</dt><dd>${escapeHtml(printContext.subjectName || evidenceJson.subject?.name || "Selected subject")}</dd></div>
       <div><dt>Assessment:</dt><dd>${escapeHtml(latestAssessment)}</dd></div>
-      <div><dt>Report version:</dt><dd>Version ${escapeHtml(snapshot.versionNumber || 1)} · ${escapeHtml(snapshot.status || "Draft")}</dd></div>
+      <div><dt>Report version:</dt><dd>Version ${escapeHtml(printContext.versionNumber)} · ${escapeHtml(printContext.status || "Draft")}</dd></div>
       <div><dt>Generated/finalised:</dt><dd>${escapeHtml(formatDate(generatedDate))}</dd></div>
     </dl>
   `;
   return header;
 }
 
+function buildPrintSummaryGrid(printContext) {
+  const report = printContext.evidence;
+  const latest = report.latestAssessment;
+  const change = report.overallProgress.latestChange;
+  const grid = document.createElement("section");
+  grid.className = "summary-grid";
+  grid.setAttribute("aria-label", "student summary");
+  grid.innerHTML = `
+    <article><span>Latest Assessment</span><strong>${latest ? `${round1(latest.markAwarded)}/${round1(latest.maximumMark)}` : "--"}</strong><small>${latest ? `${Math.round(latest.percentage)}% · ${latest.attemptedQuestions}/${latest.totalQuestions} attempted` : "No assessment data"}</small></article>
+    <article><span>Progress Change</span><strong>${change === null ? "Baseline" : `${change >= 0 ? "+" : ""}${Math.round(change)} pts`}</strong><small>${escapeHtml(report.dataQuality.assessmentCount)} assessment${report.dataQuality.assessmentCount === 1 ? "" : "s"} in this report</small></article>
+    <article><span>Grade Evidence</span><strong>${escapeHtml(report.gradeEvidence.message)}</strong><small>Safeguarded grade evidence</small></article>
+    <article><span>Learning Priority</span><strong>${escapeHtml(report.priorities[0]?.label || "Monitor evidence")}</strong><small>Lowest supported skill average</small></article>`;
+  return grid;
+}
+
+function buildPrintChartPanel(title, description, chartElement, extraClass = "") {
+  const panel = document.createElement("article");
+  panel.className = `chart-panel wide ${extraClass}`.trim();
+  panel.innerHTML = `<div class="panel-heading"><div><h2>${escapeHtml(title)}</h2><p>${escapeHtml(description)}</p></div></div>`;
+  const frame = document.createElement("div");
+  frame.className = "chart-frame";
+  frame.append(chartElement || chartPrintFallback());
+  panel.append(frame);
+  return panel;
+}
+
+function buildPrintMiniChart(title, chartElement) {
+  const item = document.createElement("div");
+  item.className = "print-mini-chart";
+  item.innerHTML = `<h3>${escapeHtml(title)}</h3>`;
+  item.append(chartElement || chartPrintFallback());
+  return item;
+}
+
+function buildPrintBoundaryDistance(report) {
+  const latest = report.latestAssessment;
+  const assessmentCount = report.dataQuality.assessmentCount;
+  const assessmentNote = assessmentCount === 1
+    ? "This is a baseline result. Longer-term comparisons and grade predictions are not reported."
+    : assessmentCount === 2
+      ? "A repeated pattern may be emerging, but more assessments are needed before a trend is reported."
+      : report.forecastEvidence.message;
+  const wrapper = document.createElement("div");
+  wrapper.className = "boundary-distance";
+  wrapper.innerHTML = latest
+    ? `<div class="boundary-summary"><div><span>Latest mark</span><strong>${round1(latest.markAwarded)}/${round1(latest.maximumMark)}</strong></div><div><span>Completion</span><strong>${Math.round(latest.completionRate)}%</strong></div><div><span>Evidence state</span><strong>${escapeHtml(report.gradeEvidence.message)}</strong></div></div><p class="boundary-target">${escapeHtml(assessmentNote)}</p>`
+    : "";
+  return wrapper;
+}
+
+function buildPrintAnnotations(report) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "annotation-grid";
+  wrapper.innerHTML = report.strengths.slice(0, 1).concat(report.priorities.slice(0, 1)).map((item) =>
+    `<div class="annotation-card"><span>${escapeHtml(item.type)}</span><strong>${escapeHtml(item.label)}</strong><p>${Math.round(item.mastery)}%, ${escapeHtml(item.confidence)}.</p></div>`
+  ).join("");
+  return wrapper;
+}
+
+function buildDifficultyPrintPanel(report) {
+  const panel = document.createElement("article");
+  panel.className = "chart-panel print-difficulty-panel";
+  panel.innerHTML = `
+    <div class="panel-heading"><div><h2>Performance by Question Difficulty<br />不同難度題目表現</h2><p>Accuracy by difficulty for fairer comparison between assessments.</p></div></div>
+    <div class="table-wrap"><table class="difficulty-table">
+      <thead><tr><th>Difficulty</th><th>Accuracy</th><th>Marks</th><th>Questions</th><th>Assessments</th></tr></thead>
+      <tbody>${report.difficultyProfile.map((item) => `<tr><td><strong>${escapeHtml(item.label)}</strong></td><td>${Math.round(item.mastery)}%</td><td>${item.marksAwarded}/${item.marksAvailable}</td><td>${item.questionCount}</td><td>${item.assessmentCount}</td></tr>`).join("")}</tbody>
+    </table></div>
+    <div class="difficulty-note"><span>Interpretation</span><p>${escapeHtml(report.difficultyInsight)}</p></div>`;
+  return panel;
+}
+
+function compactTopicTable(profile) {
+  return `
+    <table class="print-topic-table">
+      <colgroup>
+        <col style="width: 15%" /><col style="width: 8%" /><col style="width: 8%" /><col style="width: 6%" /><col style="width: 7%" /><col style="width: 6%" /><col style="width: 16%" /><col style="width: 12%" /><col style="width: 22%" />
+      </colgroup>
+      <thead><tr><th>Topic</th><th>Performance</th><th>Weighted</th><th>Easy</th><th>Medium</th><th>Hard</th><th>Evidence</th><th>Status</th><th>Key insight</th></tr></thead>
+      <tbody>${profile.map((item) => `<tr><td><strong>${escapeHtml(item.label)}</strong></td><td class="numeric-cell">${Math.round(item.mastery)}%</td><td class="numeric-cell">${Math.round(item.challengeAdjustedScore)}%</td><td class="numeric-cell">${difficultyCell(item, "Easy")}</td><td class="numeric-cell">${difficultyCell(item, "Medium")}</td><td class="numeric-cell">${difficultyCell(item, "Hard")}</td><td>${item.marksAwarded}/${item.marksAvailable} marks<br>${plural(item.questionCount, "Q")} · ${plural(item.assessmentCount, "A")}<br>${escapeHtml(item.confidence)}</td><td><span class="status-pill ${statusClass(item.status)}">${escapeHtml(printTopicStatus(item.status))}</span></td><td>${escapeHtml(item.insight.headline)}</td></tr>`).join("")}</tbody>
+    </table>`;
+}
+
+function printTopicStatus(status) {
+  return {
+    "Generally secure in this test": "Secure",
+    "Positive indication": "Positive",
+    "Possible priority": "Priority"
+  }[status] || status;
+}
+
+function buildDataQualityPrintPanel(report) {
+  const panel = document.createElement("article");
+  panel.className = "chart-panel print-data-quality-panel";
+  panel.innerHTML = `
+    <div class="panel-heading"><div><h2>Evidence Coverage / 評估證據</h2><p>Validation summary and coverage for the selected report.</p></div></div>
+    <div class="boundary-summary">
+      <div><span>Assessments</span><strong>${report.dataQuality.assessmentCount}</strong></div>
+      <div><span>Questions</span><strong>${report.dataQuality.questionCount}</strong></div>
+      <div><span>Evidence marks</span><strong>${report.dataQuality.totalEvidenceMarks}</strong></div>
+      <div><span>Date range</span><strong>${escapeHtml(report.reportingPeriod.label)}</strong></div>
+      <div><span>Missing answers</span><strong>${report.dataQuality.missingResponses}</strong></div>
+      <div><span>Overall confidence</span><strong>${escapeHtml(report.dataQuality.overallConfidence)}</strong></div>
+    </div>
+    <p class="boundary-target">${escapeHtml(report.dataQuality.validationSummary)}</p>`;
+  return panel;
+}
+
+function buildErrorPatternPrintPanel(report) {
+  const panel = document.createElement("article");
+  panel.className = "chart-panel print-error-panel";
+  panel.innerHTML = `
+    <div class="panel-heading"><div><h2>Mark-Loss Patterns / 失分模式</h2><p>Main mark-loss patterns from tutor-approved marks.</p></div></div>
+    <div class="table-wrap"><table class="difficulty-table">
+      <thead><tr><th>Primary pattern</th><th>Marks lost</th><th>Responses</th><th>Assessments</th><th>Affected topics</th><th>Recommendation</th></tr></thead>
+      <tbody>${report.errorPatterns.map((item) => `<tr><td><strong>${escapeHtml(item.errorCode)}</strong></td><td>${item.lostMarks}</td><td>${item.responseCount}</td><td>${item.assessmentCount}</td><td>${escapeHtml(item.affectedTopics.join(", ") || "-")}</td><td>${escapeHtml(item.recommendation)}</td></tr>`).join("") || `<tr><td colspan="6">No repeated error pattern has enough evidence yet.</td></tr>`}</tbody>
+    </table></div>`;
+  return panel;
+}
+
+function buildHeatmapPrintPanel(report) {
+  const assessmentsForHeatmap = report.overallProgress.assessments;
+  const panel = document.createElement("article");
+  panel.className = "chart-panel print-heatmap-panel";
+  panel.innerHTML = `
+    <div class="panel-heading"><div><h2>Topic Performance Across Assessments<br />各次測驗課題表現</h2><p>Topic performance across completed and fully marked assessments.</p></div></div>
+    <div class="table-wrap"><table class="heatmap-table">
+      <thead><tr><th>Topic</th>${assessmentsForHeatmap.map((item) => `<th>${escapeHtml(shortDate(item.date))}</th>`).join("")}<th>Current</th></tr></thead>
+      <tbody>${report.topicProfile.map((topic) => `<tr><td><strong>${escapeHtml(topic.label)}</strong></td>${assessmentsForHeatmap.map((assessment) => {
+        const value = topic.assessmentScores.find((item) => item.assessmentId === assessment.assessmentId);
+        return value ? `<td class="heat-cell ${heatClass(value.percentage)}">${Math.round(value.percentage)}%</td>` : `<td>-</td>`;
+      }).join("")}<td><span class="status-pill ${statusClass(topic.status)}">${escapeHtml(topic.status)}</span></td></tr>`).join("")}</tbody>
+    </table></div>`;
+  return panel;
+}
+
 function buildPrintReportFooter() {
   const footer = document.createElement("footer");
-  footer.className = "report-print-footer";
+  footer.className = "print-report-footer";
   footer.textContent = "Page generated from the centre assessment prototype.";
   return footer;
 }
 
-function replaceReportCanvasesWithImages(clone) {
-  const canvasIds = [
-    ["trendChart", "Assessment progress chart"],
-    ["radarChart", "Interactive performance profile chart"],
-    ["curveChart", "Assessment score overview chart"],
-    ["printTopicRadarChart", "Topic performance radar chart"],
-    ["printQuestionRadarChart", "Question type performance radar chart"]
-  ];
-
-  canvasIds.forEach(([canvasId, altText]) => {
-    const clonedCanvas = [...clone.querySelectorAll("canvas")].find((canvas) => canvas.id === canvasId);
-    if (!clonedCanvas) return;
-
-    let replacement = null;
-    try {
-      replacement = canvasToPrintImage(document.querySelector(`#${canvasId}`), altText)
-        || chartInstanceToPrintImage(reportChartByCanvasId(canvasId), altText);
-    } catch (error) {
-      console.warn(`Chart conversion failed for ${canvasId}:`, error);
-    }
-
-    clonedCanvas.replaceWith(replacement || chartPrintFallback());
-  });
+function buildProgressPrintImage(printContext) {
+  const report = printContext.evidence;
+  const labels = report.overallProgress.assessments.map((item) => formatDate(item.date));
+  const scores = report.overallProgress.assessments.map((item) => Math.round(item.percentage));
+  const data = {
+    labels,
+    datasets: [{
+      label: "Assessment score",
+      data: scores,
+      borderColor: "#2563eb",
+      backgroundColor: "#2563eb",
+      tension: 0.25,
+      pointRadius: 3,
+      borderWidth: 2
+    }]
+  };
+  return chartDataToPrintImage("line", data, "Assessment progress chart", "progress");
 }
 
-function canvasToPrintImage(sourceCanvas, altText) {
+function buildScorePrintImage(printContext) {
+  const report = printContext.evidence;
+  const data = {
+    labels: report.overallProgress.assessments.map((item) => formatDate(item.date)),
+    datasets: [{
+      label: "Assessment %",
+      data: report.overallProgress.assessments.map((item) => Math.round(item.percentage)),
+      backgroundColor: "#1f78a8"
+    }]
+  };
+  return chartDataToPrintImage("bar", data, "Assessment score overview chart", "standard");
+}
+
+function buildRadarPrintImage(profile, label, altText) {
+  const data = {
+    labels: profile.map((item) => item.label),
+    topicProfile: profile,
+    datasets: [{
+      label,
+      data: profile.map((item) => Math.round(item.mastery ?? 0)),
+      backgroundColor: "rgba(37, 99, 235, 0.18)",
+      borderColor: "#2563eb",
+      pointBackgroundColor: "#2563eb",
+      borderWidth: 2
+    }]
+  };
+  return chartDataToPrintImage("radar", data, altText, "radar");
+}
+
+function canvasToPrintImage(sourceCanvas, altText, chartType = "standard") {
   try {
     if (!sourceCanvas || sourceCanvas.width <= 0 || sourceCanvas.height <= 0) return null;
     const dataUrl = sourceCanvas.toDataURL("image/png", 1.0);
@@ -2891,6 +3155,7 @@ function canvasToPrintImage(sourceCanvas, altText) {
 
     const image = document.createElement("img");
     image.className = "print-chart-image";
+    image.classList.add(`print-chart-${chartType}`);
     image.alt = altText;
     image.src = dataUrl;
     image.width = sourceCanvas.width;
@@ -2900,6 +3165,47 @@ function canvasToPrintImage(sourceCanvas, altText) {
     console.warn("Canvas image conversion skipped:", error);
     return null;
   }
+}
+
+function chartDataToPrintImage(type, data, altText, chartType = "standard") {
+  if (typeof Chart === "undefined") return chartPrintFallback();
+  const tempCanvas = document.createElement("canvas");
+  const dimensions = printChartDimensions(chartType);
+  tempCanvas.width = dimensions.width;
+  tempCanvas.height = dimensions.height;
+  tempCanvas.style.cssText = `position:fixed;left:-10000px;top:0;width:${dimensions.width}px;height:${dimensions.height}px;background:#fff;`;
+  let printChart = null;
+
+  try {
+    document.body.append(tempCanvas);
+    const ctx = tempCanvas.getContext("2d");
+    if (!ctx) return chartPrintFallback();
+    printChart = new Chart(ctx, {
+      type,
+      data: cloneChartDataForPrint(data),
+      options: printChartOptions(type, chartType)
+    });
+    printChart.update("none");
+    return canvasToPrintImage(tempCanvas, altText, chartType) || chartPrintFallback();
+  } catch (error) {
+    console.warn("Print chart render skipped:", error);
+    return chartPrintFallback();
+  } finally {
+    try {
+      printChart?.destroy?.();
+    } catch (error) {
+      console.warn("Temporary chart cleanup skipped:", error);
+    }
+    tempCanvas.remove();
+  }
+}
+
+function printChartDimensions(chartType) {
+  return {
+    progress: { width: 980, height: 300 },
+    radar: { width: 560, height: 450 },
+    standard: { width: 980, height: 430 }
+  }[chartType] || { width: 900, height: 430 };
 }
 
 function chartInstanceToPrintImage(chart, altText) {
@@ -2918,10 +3224,10 @@ function chartInstanceToPrintImage(chart, altText) {
     printChart = new Chart(ctx, {
       type: chart.config.type,
       data: cloneChartDataForPrint(chart.data),
-      options: printChartOptions(chart.config.type)
+      options: printChartOptions(chart.config.type, isRadar ? "radar" : "standard")
     });
     printChart.update("none");
-    return canvasToPrintImage(tempCanvas, altText);
+    return canvasToPrintImage(tempCanvas, altText, isRadar ? "radar" : "standard");
   } catch (error) {
     console.warn("Temporary chart print render skipped:", error);
     return null;
@@ -2953,7 +3259,7 @@ function cloneChartDataForPrint(data) {
   };
 }
 
-function printChartOptions(type) {
+function printChartOptions(type, chartType = "standard") {
   if (type === "radar") {
     return {
       responsive: false,
@@ -2963,12 +3269,15 @@ function printChartOptions(type) {
         r: {
           min: 0,
           max: 100,
-          ticks: { stepSize: 20, backdropColor: "transparent", color: "#667085" },
+          ticks: { stepSize: 20, backdropColor: "transparent", color: "#667085", font: { size: 6 } },
           grid: { color: "#d8dee8" },
-          pointLabels: { color: "#17202a", font: { weight: 700 } }
+          pointLabels: { color: "#17202a", font: { size: 6, weight: 700 } }
         }
       },
-      plugins: { legend: { display: false } }
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: false }
+      }
     };
   }
 
@@ -2977,11 +3286,12 @@ function printChartOptions(type) {
     maintainAspectRatio: false,
     animation: false,
     scales: {
-      y: { min: 0, max: 100, ticks: { color: "#667085" }, grid: { color: "#e4e9f1" } },
-      x: { ticks: { color: "#667085", maxRotation: 0 }, grid: { display: false } }
+      y: { min: 0, max: 100, ticks: { color: "#667085", font: { size: 7 } }, grid: { color: "#e4e9f1" } },
+      x: { ticks: { color: "#667085", maxRotation: 0, font: { size: 7 } }, grid: { display: false } }
     },
     plugins: {
-      legend: { position: "bottom", labels: { boxWidth: 12, usePointStyle: true, color: "#17202a" } }
+      legend: { position: "bottom", labels: { boxWidth: 8, usePointStyle: true, color: "#17202a", font: { size: 8 } } },
+      tooltip: { enabled: false }
     }
   };
 }
